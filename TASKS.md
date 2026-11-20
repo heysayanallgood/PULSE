@@ -1,0 +1,106 @@
+# PULSE Engineering Tasks (TASKS.md)
+
+## Authoritative Progress & Verification Tracker
+
+### Phase 0: Machine, Storage & Data Preflight
+- [x] Inspect `E:\Pulse` workspace and directory contents
+- [x] Verify disk space across volumes (793 GB free on E:, 4 GB on C:)
+- [x] Check Python 3.12, pip, and git availability
+- [x] Create project-local virtual environment at `E:\Pulse\.venv`
+- [x] Inspect static GTFS files (6,862 stops, 2,574 routes, 80,357 trips, 965,607 shape points)
+- [x] Inspect historical GPS archive: all 31 daily SQLite databases verified (115.50 GB total)
+- [x] Verify SQLite table schema (`vehicle_feed`, 31.3M records on Oct 01, speed in m/s)
+- [x] Verify route_id mapping between SQLite and GTFS
+- [x] Generate preflight report (`docs/PREFLIGHT_REPORT.md`)
+
+### Architectural Review & ADR Alignment (Phase 0.5)
+- [x] Step 1: Inspect root `DECISIONS.md`
+- [x] Step 2: Inspect `E:\Pulse` directory and existing code
+- [x] Step 3: Inventory extracted historical data (all 31 daily DBs, 115.5 GB) and GTFS source files
+- [x] Step 4: Rewrite root `DECISIONS.md` with final six ADRs
+  - [x] ADR 001: Storage & Virtual Environment Isolation (Accepted with Additional Requirements)
+  - [x] ADR 002: Historical Analytics & Storage (Amended — Replaces zero-copy claim, speed + travel-time distributions)
+  - [x] ADR 003: Coordinate System & Metric Projections (Accepted with Implementation Precisions)
+  - [x] ADR 004: Public Transit Routing (Amended — Multi-criteria RAPTOR with arrival, transfers, walking)
+  - [x] ADR 005: Live and Historical Fusion (Amended — Uncertainty-aware, freshness-aware Bayesian fusion)
+  - [x] ADR 006: Raw Data Immutability and Provenance (New — Accepted, raw data read-only, manifests, lineage)
+- [x] Step 5: Update cross-referenced architecture and engineering documentation (`docs/`)
+- [x] Step 6: Audit actual code against decisions
+- [x] Step 7: Correct safe, high-priority inconsistencies
+- [x] Step 8: Write and run focused verification tests
+- [x] Step 9: Produce `docs/ADR_IMPLEMENTATION_AUDIT.md`
+- [x] Step 10: Deliver final architectural completion report
+
+### Phase 1: System Architecture & Foundation
+- [x] Setup `E:\Pulse\data\cache\` directory structure (`pip/`, `temp/`, `duckdb/`)
+- [x] Install pinned Python dependencies into `E:\Pulse\.venv` with explicit pip cache on E:
+- [x] Implement `app/core/config.py` with secret redaction and environment loading
+- [x] Implement `app/core/storage.py` with storage diagnostic checks (ADR 001)
+- [x] Implement `app/core/logging.py` ensuring zero secret leaks
+- [x] Implement FastAPI application `app/main.py` with `/api/v1/health` and `/api/v1/ready`
+- [x] Setup pytest automated test suite in `tests/`
+
+### Phase 2: Static GTFS Ingestion & Network Graph
+- [x] Build `scripts/ingest_gtfs.py` for high-throughput DuckDB loading
+- [x] Ingest stops, routes, trips, stop_times, and shapes into `data/database/gtfs.duckdb` (170 MB)
+- [x] Create metric projection spatial index in `app/geo/spatial_index.py` using SciPy KDTree (EPSG:32643)
+- [x] Implement data access repository in `app/data/gtfs/repository.py`
+- [x] Add unit tests in `tests/integration/test_phase2_gtfs.py`
+
+### Phase 3 & 4: Historical GPS Processing & Segmentation
+- [x] Implement `scripts/process_day.py` for streaming read-only SQLite processing
+- [x] Filter out-of-bounds GPS coordinates (Delhi bounding box: 28.2°N–28.95°N, 76.8°E–77.55°E)
+- [x] Filter unrealistic speeds (> 25 m/s / 90 km/h)
+- [x] Convert timestamps to 15-minute time buckets (0–95) and day types (weekday/weekend)
+- [x] Slice 3,498 route shapes into 163,018 metric 300m–500m segments (`scripts/build_segments.py`)
+- [x] Output Snappy Parquet partitions with cryptographic SHA256 run manifests
+
+### Phase 5: Core Spatiotemporal Travel-Time Engine
+- [x] Build `scripts/train_travel_time_model.py` synthesizing dual distributions
+- [x] Populate `data/database/travel_time.duckdb` with 31,299,456 indexed segment distribution records
+- [x] Implement `app/services/prediction_service.py` with segment traversal prediction
+- [x] Verify peak (08:30: 68.7m) vs. off-peak (23:00: 28.4m) duration differential on Route 1728
+- [x] Add dwell time accounting without double-counting running time
+
+### Phase 6: Live GTFS-RT & Bayesian Fusion
+- [x] Implement precision-weighted Bayesian fusion math in `app/models/live_fusion.py`
+- [x] Implement variance floor ($V \ge 4.0\text{ s}^2$) and observation weight decay
+- [x] Implement consecutive vehicle ping velocity calculation
+- [x] Implement freshness state machine (`FRESH` $\le 60$s, `AGING` $61$–$90$s, `STALE` $> 90$s, `UNAVAILABLE`)
+- [x] Implement async GTFS-RT poller in `app/services/realtime_service.py`
+
+### Phase 7: Multi-Criteria RAPTOR Transit Router
+- [x] Implement metric walking path generator in `app/routing/walking.py` (1.25 urban winding factor)
+- [x] Implement multi-criteria RAPTOR routing engine in `app/routing/raptor.py`
+- [x] Implement Pareto dominance tracking (earliest arrival, transfer count, walking duration)
+- [x] Implement realistic 3-minute platform transfer buffers
+- [x] Support GTFS midnight rollover service times (> 24:00:00)
+- [x] Implement `app/services/journey_service.py` coordinating origin/destination resolution and routing
+
+### Phase 8: REST API Endpoints
+- [x] Implement `/api/v1/stops/search` and `/api/v1/stops/nearby`
+- [x] Implement `/api/v1/routes` and `/api/v1/routes/{route_id}`
+- [x] Implement `/api/v1/journeys/plan`
+- [x] Implement `/api/v1/analytics/time-comparison`
+- [x] Implement `/api/v1/validation/summary`
+- [x] Implement `/api/v1/vehicles`
+- [x] Mount static files and single-page application at root `/`
+- [x] Register OpenAPI docs and schemas at `/docs`
+
+### Phase 9: Interactive Web Client
+- [x] Build single-page web UI in `frontend/index.html`
+- [x] Build HopCode glassmorphism dark theme in `frontend/static/css/pulse.css`
+- [x] Implement Leaflet map renderer with dynamic route polyline rendering in `frontend/static/js/app.js`
+- [x] Build interactive Journey Planner card list with collapsible step-by-step directions
+- [x] Build Time Machine departure comparison slider
+- [x] Build Live Bus Map visualizer with vehicle freshness badges
+- [x] Build Validation Lab benchmark dashboard
+
+### Phase 10: Validation, Benchmarking & Documentation
+- [x] Conduct benchmark evaluation against 1,250 observed DTC bus runs
+- [x] Compute MAE, RMSE, MAD, and 90% prediction interval coverage
+- [x] Author comprehensive `docs/VALIDATION_REPORT.md`
+- [x] Author comprehensive `docs/API_REFERENCE.md`
+- [x] Author hackathon presentation script `docs/DEMO_SCRIPT.md`
+- [x] Author authoritative `README.md`
+- [x] Verify all 35 unit and integration tests passing (`pytest tests/ -v`)

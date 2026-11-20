@@ -1,0 +1,41 @@
+# Environment & Secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+env/
+venv/
+ENV/
+
+# Pip & Cache (ADR 001)
+.cache/
+data/cache/
+data/staging/
+
+# Raw Datasets (Immutable - ADR 006)
+delhi-dtc-bus-gtfs-rt-2026-10/
+delhi_buses_static_gtfs_v1/
+*.7z
+*.zip
+*.db
+
+# DuckDB / SQLite / Parquet local analytical stores
+data/database/*.duckdb
+data/database/*.duckdb.wal
+data/processed/historical/
+data/models/*.joblib
+data/models/*.parquet
+
+# Logs & Tests
+logs/
+*.log
+.pytest_cache/
+.coverage
+htmlcov/

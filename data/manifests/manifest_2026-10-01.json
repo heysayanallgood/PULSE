@@ -1,0 +1,23 @@
+{
+  "pipeline_run_id": "d8231fbe-04b6-4fc3-a090-108d6112c958",
+  "date": "2026-10-01",
+  "source_file": "bus_movements_2026_10_01.db",
+  "source_size_bytes": 3420090368,
+  "source_records_extracted": 500000,
+  "records_cleaned": 499993,
+  "records_rejected": 7,
+  "rejection_breakdown": {
+    "null_or_invalid_coords": 0,
+    "out_of_bounds": 7,
+    "speed_outlier": 3235,
+    "invalid_timestamp": 0
+  },
+  "output_parquet_files": [
+    "E:\\Pulse\\data\\processed\\historical\\year=2026\\month=10\\day=01\\part-0001.parquet",
+    "E:\\Pulse\\data\\processed\\historical\\year=2026\\month=10\\day=01\\part-0002.parquet"
+  ],
+  "processing_time_seconds": 5.96,
+  "throughput_records_per_sec": 83827.7,
+  "status": "COMPLETED",
+  "timestamp": "2026-11-20T15:37:23.541342+00:00"
+}

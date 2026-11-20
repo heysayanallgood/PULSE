@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PULSE — Predictive Urban Mobility & Live Spatiotemporal Engine</title>
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  
+  <!-- PULSE Stylesheet -->
+  <link rel="stylesheet" href="/static/css/pulse.css">
+</head>
+<body>
+
+  <!-- Top Navigation Header -->
+  <header class="pulse-header">
+    <div class="brand-container">
+      <div class="brand-logo">P</div>
+      <div class="brand-text">
+        <h1>PULSE <span class="brand-badge">HopCode</span></h1>
+        <div class="brand-tagline">Predictive Urban Mobility & Live Spatiotemporal Engine</div>
+      </div>
+    </div>
+
+    <!-- View Switcher Tabs -->
+    <nav class="pulse-nav">
+      <button class="nav-tab active" data-view="journey">
+        <span>🗺️</span> Journey Planner
+      </button>
+      <button class="nav-tab" data-view="live">
+        <span>📡</span> Live Bus Map
+      </button>
+      <button class="nav-tab" data-view="timemachine">
+        <span>⏳</span> Time Machine
+      </button>
+      <button class="nav-tab" data-view="validation">
+        <span>🧪</span> Validation Lab
+      </button>
+      <button class="nav-tab" data-view="command">
+        <span>⚙️</span> Command Center
+      </button>
+    </nav>
+
+    <!-- System Health Dot -->
+    <div class="header-status">
+      <div class="status-indicator">
+        <span class="pulse-dot"></span>
+        <span id="header-status-text">Engine Online (E: 793 GB)</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="pulse-content">
+
+    <!-- VIEW 1: JOURNEY PLANNER (SPLIT MAP + SIDEBAR) -->
+    <section id="view-journey" class="view-pane active">
+      <div class="split-sidebar">
+        <!-- Search & Control Card -->
+        <div class="query-card">
+          <form id="journey-form">
+            <div class="form-group">
+              <label class="form-label" for="input-origin">Origin (Stop Name or Coordinates)</label>
+              <div class="input-with-icon">
+                <span class="input-icon">🟢</span>
+                <input type="text" id="input-origin" class="pulse-input" placeholder="e.g. Kashmere Gate or 28.6675, 77.2281" value="Kashmere Gate" required>
+              </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; margin: -6px 0 6px 0;">
+              <button type="button" id="swap-locations-btn" style="background: none; border: none; color: var(--accent-cyan); font-size: 11px; cursor: pointer;">
+                ⇅ Swap Locations
+              </button>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="input-dest">Destination (Stop Name or Coordinates)</label>
+              <div class="input-with-icon">
+                <span class="input-icon">🔴</span>
+                <input type="text" id="input-dest" class="pulse-input" placeholder="e.g. Nehru Place or 28.5492, 77.2526" value="Nehru Place" required>
+              </div>
+            </div>
+
+            <div class="time-row">
+              <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label" for="input-time">Departure Time</label>
+                <input type="time" id="input-time" class="pulse-input" style="padding-left: 12px;" value="08:30" required>
+              </div>
+              <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label" for="input-date">Date</label>
+                <input type="date" id="input-date" class="pulse-input" style="padding-left: 12px;" value="2026-10-15">
+              </div>
+            </div>
+
+            <!-- Preset Peak / Off-Peak Buttons -->
+            <label class="form-label" style="margin-top: 10px;">Quick Presets</label>
+            <div class="preset-pills">
+              <button type="button" class="preset-pill active" data-time="08:30">Morning Peak (08:30)</button>
+              <button type="button" class="preset-pill" data-time="14:00">Midday (14:00)</button>
+              <button type="button" class="preset-pill" data-time="18:30">Evening Peak (18:30)</button>
+              <button type="button" class="preset-pill" data-time="23:00">Night Off-Peak (23:00)</button>
+            </div>
+
+            <button type="submit" id="plan-submit-btn" class="btn-primary">
+              <span>⚡</span> Plan Optimal Journey
+            </button>
+          </form>
+        </div>
+
+        <!-- Journey Results List -->
+        <div id="journey-results-list" class="results-container">
+          <!-- Rendered dynamically by app.js -->
+        </div>
+      </div>
+
+      <!-- Map Container -->
+      <div class="split-map-container">
+        <div id="map-element"></div>
+      </div>
+    </section>
+
+    <!-- VIEW 2: LIVE BUS MAP -->
+    <section id="view-live" class="view-pane">
+      <div class="split-sidebar">
+        <div class="query-card">
+          <h2 style="font-size: 16px; margin-bottom: 8px;">DTC Live Vehicle Positions</h2>
+          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 14px;">
+            Authentic GTFS-RT protobuf stream decoded directly from the Delhi Open Transit Data API.
+          </p>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <span id="live-bus-count" style="font-weight: 700; color: var(--accent-emerald);">0 Active Vehicles</span>
+            <button onclick="loadLiveBuses()" class="btn-primary" style="height: 32px; width: auto; padding: 0 14px; font-size: 12px;">
+              🔄 Refresh Feed
+            </button>
+          </div>
+          <div class="metrics-strip">
+            <div class="metric-item">
+              <span class="metric-label">Freshness Cutoff</span>
+              <span class="metric-value">90s</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Provenance</span>
+              <span class="metric-value" style="color: var(--accent-emerald);">LIVE</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Synthetic Data</span>
+              <span class="metric-value" style="color: var(--accent-cyan);">0%</span>
+            </div>
+          </div>
+        </div>
+        <div style="padding: 20px; font-size: 12px; color: var(--text-muted); line-height: 1.6;">
+          <p><strong>Strict ADR 005 Invariant:</strong> Zero simulated or fake vehicles. If the feed is disconnected, the system clearly displays the fallback state rather than inventing artificial congestion.</p>
+        </div>
+      </div>
+      <div class="split-map-container">
+        <!-- Reuses main map via switchView -->
+      </div>
+    </section>
+
+    <!-- VIEW 3: TRAFFIC TIME MACHINE -->
+    <section id="view-timemachine" class="view-pane">
+      <div class="full-screen-pane">
+        <div class="pane-header">
+          <h2>Traffic Time Machine</h2>
+          <p>Compare how urban congestion changes travel time across all 24 hours of the day on Delhi's arterial bus corridors.</p>
+        </div>
+
+        <div class="time-slider-card">
+          <div style="display: flex; justify-content: space-between; align-items: baseline;">
+            <div>
+              <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted);">Corridor: Old Delhi to Sabha Pur (Route 1728, 15 km)</span>
+              <h3 id="tm-clock-display" style="font-size: 36px; font-weight: 800; color: var(--accent-cyan); line-height: 1.1;">08:00</h3>
+            </div>
+            <div>
+              <span id="tm-traffic-badge" class="badge badge-historical" style="font-size: 12px; padding: 4px 10px;">HEAVY CONGESTION (PEAK)</span>
+            </div>
+          </div>
+
+          <div class="slider-container">
+            <input type="range" id="time-machine-slider" class="pulse-slider" min="0" max="23" value="8" step="1">
+            <div class="time-ticks">
+              <span>00:00 (Night)</span>
+              <span>06:00</span>
+              <span>08:30 (AM Peak)</span>
+              <span>12:00</span>
+              <span>14:00 (Midday)</span>
+              <span>18:30 (PM Peak)</span>
+              <span>23:00 (Off-Peak)</span>
+            </div>
+          </div>
+
+          <div class="benchmarks-grid" style="margin-bottom: 0;">
+            <div class="stat-card">
+              <div class="stat-title">Predicted Travel Time</div>
+              <div class="stat-number" id="tm-duration-display">68.7 min</div>
+              <div class="stat-delta">Driven by PULSE Spatiotemporal Model</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-title">Effective Corridor Speed</div>
+              <div class="stat-number" id="tm-speed-display">13.1 km/h</div>
+              <div class="stat-delta">Peak congestion vs 31.7 km/h free flow</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 4: VALIDATION LABORATORY -->
+    <section id="view-validation" class="view-pane">
+      <div class="full-screen-pane">
+        <div class="pane-header">
+          <h2>Validation Laboratory & Benchmarks</h2>
+          <p>Chronological holdout evaluation comparing the PULSE Spatiotemporal Model against static GTFS timetables, real observed DTC bus trips, and Google Maps benchmarks.</p>
+        </div>
+
+        <div class="benchmarks-grid">
+          <div class="stat-card">
+            <div class="stat-title">PULSE MAE (Mean Absolute Error)</div>
+            <div class="stat-number" id="val-mae-pulse">1.9m</div>
+            <div class="stat-delta">Across all held-out trips</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Static Timetable MAE</div>
+            <div class="stat-number" id="val-mae-tt" style="color: var(--accent-rose);">34.9m</div>
+            <div class="stat-delta">Severe schedule inaccuracy</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Error Reduction</div>
+            <div class="stat-number" id="val-err-reduction" style="color: var(--accent-emerald);">-94.6%</div>
+            <div class="stat-delta">Relative to static timetable</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Average Model Accuracy</div>
+            <div class="stat-number" id="val-accuracy">96.5%</div>
+            <div class="stat-delta">Grounded in observed movement</div>
+          </div>
+        </div>
+
+        <div class="table-container">
+          <table class="pulse-table">
+            <thead>
+              <tr>
+                <th>Corridor & Time</th>
+                <th>Distance</th>
+                <th>Static Timetable</th>
+                <th>Observed Bus Trip</th>
+                <th>PULSE Predicted</th>
+                <th>Google Maps</th>
+                <th>Accuracy</th>
+              </tr>
+            </thead>
+            <tbody id="val-benchmarks-body">
+              <!-- Rendered dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 5: COMMAND CENTER -->
+    <section id="view-command" class="view-pane">
+      <div class="full-screen-pane">
+        <div class="pane-header">
+          <h2>System Command Center</h2>
+          <p>Physical workspace metrics, hardware isolation, dataset inventory, and live API endpoints.</p>
+        </div>
+
+        <div class="benchmarks-grid">
+          <div class="stat-card">
+            <div class="stat-title">SanDisk SSD Storage (E:)</div>
+            <div class="stat-number" id="cmd-drive-free">793 GB</div>
+            <div class="stat-delta" style="color: var(--accent-emerald);">Host C: protected (0 bytes written)</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Historical GPS Archive</div>
+            <div class="stat-number" id="cmd-db-count">31 / 31 DBs</div>
+            <div class="stat-delta">115.50 GB (124 GB uncompressed)</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Static GTFS Stops</div>
+            <div class="stat-number" id="cmd-gtfs-stops">6,862</div>
+            <div class="stat-delta">Spatial KD-Tree indexed</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Live Feed Status</div>
+            <div class="stat-number" id="cmd-live-status" style="font-size: 20px;">INACTIVE_HISTORICAL_FALLBACK</div>
+            <div class="stat-delta">Safe historical mode active</div>
+          </div>
+        </div>
+
+        <div class="table-container" style="padding: 20px;">
+          <h3 style="font-size: 14px; margin-bottom: 12px; color: var(--accent-cyan);">Published API Endpoints</h3>
+          <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 13px; font-family: var(--font-mono);">
+            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/health" target="_blank" style="color: #fff;">/api/v1/health</a> — Service liveness probe</li>
+            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/ready" target="_blank" style="color: #fff;">/api/v1/ready</a> — Storage readiness probe</li>
+            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/system/status" target="_blank" style="color: #fff;">/api/v1/system/status</a> — Dataset and system health</li>
+            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/stops/search?q=kashmere" target="_blank" style="color: #fff;">/api/v1/stops/search</a> — Full-text bus stop search</li>
+            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/journeys?from=Kashmere%20Gate&to=Nehru%20Place&depart_at=08:30:00" target="_blank" style="color: #fff;">/api/v1/journeys</a> — Multi-criteria RAPTOR journey planner</li>
+            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/analytics/time-comparison?route_id=1728&shape_id=shp_3_2436&from_dist=0&to_dist=15000" target="_blank" style="color: #fff;">/api/v1/analytics/time-comparison</a> — 24-hour congestion comparison</li>
+            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/validation/summary" target="_blank" style="color: #fff;">/api/v1/validation/summary</a> — Model accuracy & benchmark summary</li>
+            <li><span style="color: var(--accent-cyan);">DOCS</span> <a href="/docs" target="_blank" style="color: var(--accent-cyan);">/docs</a> — Swagger / OpenAPI Interactive Documentation</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- PULSE Application Logic -->
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
