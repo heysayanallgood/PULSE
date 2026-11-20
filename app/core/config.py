@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     OTD_VEHICLE_POSITIONS_URL: str = "https://otd.delhi.gov.in/api/realtime/VehiclePositions.pb"
     OTD_API_KEY: Optional[str] = Field(default=None, description="Auth key for Delhi OTD Live Feed")
     OTD_API_KEY_PARAM: str = "key"
+    CARTO_API_KEY: Optional[str] = Field(default=None, description="Basemaps API key for CARTO Dark Matter tiles")
 
     # Real-Time Service Settings
     LIVE_FEED_ENABLED: bool = False

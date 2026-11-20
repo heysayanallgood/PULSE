@@ -4,21 +4,37 @@ PULSE Live Vehicles API Endpoints (app/api/v1/vehicles.py)
 from fastapi import APIRouter, Query
 from typing import List, Dict, Any, Optional
 
+from app.core.config import settings
 from app.services.realtime_service import realtime_service
 
 router = APIRouter(prefix="/vehicles", tags=["Vehicles"])
 
 
 @router.get("", response_model=List[Dict[str, Any]])
-def get_live_vehicles(
+async def get_live_vehicles(
     route_id: Optional[str] = Query(None, description="Filter by route_id"),
-    limit: int = Query(100, ge=1, le=500, description="Max vehicles to return")
+    limit: int = Query(1500, ge=1, le=5000, description="Max vehicles to return")
 ):
     """
     Returns authentic active live vehicle positions from the Delhi OTD GTFS-RT feed.
     Each record includes vehicle_id, coordinates, speed, and freshness state.
     """
+    if len(realtime_service.active_vehicles) == 0 and settings.LIVE_FEED_ENABLED and settings.OTD_API_KEY:
+        await realtime_service.poll_once()
+
     return realtime_service.get_live_vehicles(route_id=route_id, max_count=limit)
+
+
+@router.post("/refresh", response_model=Dict[str, Any])
+async def refresh_live_feed():
+    """Triggers an immediate on-demand poll of the live GTFS-RT feed."""
+    parsed = await realtime_service.poll_once()
+    health = realtime_service.get_feed_health()
+    return {
+        "status": "SUCCESS" if parsed > 0 else "NO_DATA",
+        "parsed_count": parsed,
+        "health": health
+    }
 
 
 @router.get("/health", response_model=Dict[str, Any])

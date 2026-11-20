@@ -3,6 +3,7 @@ PULSE — Predictive Urban Mobility & Live Spatiotemporal Engine
 FastAPI Production Application Entrypoint (app/main.py)
 """
 import time
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.storage import run_storage_diagnostics, configure_process_environment
+from app.services.realtime_service import realtime_service
 from app.api.v1.stops import router as stops_router
 from app.api.v1.routes import router as routes_router
 from app.api.v1.journeys import router as journeys_router
@@ -34,10 +36,22 @@ async def lifespan(app: FastAPI):
     diag = run_storage_diagnostics()
     logger.info(f"PULSE {settings.APP_VERSION} starting up. Storage check: {diag['status']} ({diag['free_gb']} GB free on E:)")
     
+    # Launch live GTFS-RT feed poller in background if enabled
+    poll_task = None
+    if settings.LIVE_FEED_ENABLED and settings.OTD_API_KEY:
+        poll_task = asyncio.create_task(realtime_service.start_background_poller())
+        logger.info("Launched live GTFS-RT background poller task.")
+    
     # 2. Yield control to application
     yield
     
     # 3. Shutdown: Clean up resources
+    if poll_task:
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
     logger.info("PULSE application shutting down cleanly.")
 
 
@@ -76,11 +90,27 @@ app.mount("/static", StaticFiles(directory="E:/Pulse/frontend/static"), name="st
 
 @app.get("/", tags=["UI"], response_class=HTMLResponse)
 def index_page():
-    """Serves the PULSE Interactive Web Application."""
+    """Serves the PULSE Interactive Web Application with injected configuration."""
     index_file = Path("E:/Pulse/frontend/index.html")
     if index_file.exists():
-        return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
+        html = index_file.read_text(encoding="utf-8")
+        carto_key = settings.CARTO_API_KEY or ""
+        config_script = f"<script>window.PULSE_CONFIG = {{ cartoApiKey: '{carto_key}', liveEnabled: {'true' if settings.LIVE_FEED_ENABLED else 'false'} }};</script>"
+        if "</head>" in html:
+            html = html.replace("</head>", f"  {config_script}\n</head>")
+        return HTMLResponse(content=html)
     return HTMLResponse(content="<h1>PULSE API is Running</h1><p><a href='/docs'>Swagger API Documentation</a></p>")
+
+
+@app.get("/api/v1/config", tags=["System"])
+def get_public_config() -> Dict[str, Any]:
+    """Returns safe client-side UI configurations (basemap keys, intervals)."""
+    return {
+        "carto_api_key": settings.CARTO_API_KEY,
+        "live_feed_enabled": settings.LIVE_FEED_ENABLED,
+        "poll_interval_seconds": settings.LIVE_POLL_INTERVAL_SECONDS,
+        "app_version": settings.APP_VERSION
+    }
 
 
 @app.get("/api", tags=["Root"])

@@ -32,12 +32,32 @@ function initMap() {
 
   L.control.zoom({ position: 'bottomright' }).addTo(state.map);
 
-  // CartoDB Dark Matter tile layer for high-contrast dark theme
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  // Retrieve injected CARTO API key
+  const cartoKey = (window.PULSE_CONFIG && window.PULSE_CONFIG.cartoApiKey) 
+    ? window.PULSE_CONFIG.cartoApiKey.trim() 
+    : 'cb1_5d19_1_258c3b9d8e04bf2290f574b2';
+
+  const tileUrl = cartoKey 
+    ? `https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png?key=${encodeURIComponent(cartoKey)}`
+    : `https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png`;
+
+  const cartoLayer = L.tileLayer(tileUrl, {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
     subdomains: 'abcd',
     maxZoom: 19
   }).addTo(state.map);
+
+  // Fallback to OSM tile layer if Carto fails
+  cartoLayer.on('tileerror', function() {
+    if (!state._osmFallbackAdded) {
+      state._osmFallbackAdded = true;
+      console.warn("Carto tile error, falling back to OpenStreetMap tiles.");
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19
+      }).addTo(state.map);
+    }
+  });
 
   state.routeLayer = L.featureGroup().addTo(state.map);
   state.busLayer = L.featureGroup().addTo(state.map);
@@ -63,18 +83,46 @@ function switchView(viewName) {
     p.classList.toggle('active', p.id === `view-${viewName}`);
   });
 
-  // Handle Map Resizing & Specific Views
+  // Handle map layer visibility between views
+  if (viewName === 'journey') {
+    if (state.map && !state.map.hasLayer(state.routeLayer)) {
+      state.map.addLayer(state.routeLayer);
+    }
+    if (state.map && state.map.hasLayer(state.busLayer)) {
+      state.map.removeLayer(state.busLayer);
+    }
+    if (state.pollTimer) {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    }
+  } else if (viewName === 'live') {
+    if (state.map && !state.map.hasLayer(state.busLayer)) {
+      state.map.addLayer(state.busLayer);
+    }
+    if (state.map && state.map.hasLayer(state.routeLayer)) {
+      state.map.removeLayer(state.routeLayer);
+    }
+    loadLiveBuses();
+    if (!state.pollTimer) {
+      state.pollTimer = setInterval(loadLiveBuses, 30000);
+    }
+  } else {
+    // Hidden on full-screen views
+    if (state.pollTimer) {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    }
+    if (viewName === 'validation') {
+      loadValidationLab();
+    } else if (viewName === 'command') {
+      loadCommandStatus();
+    }
+  }
+
+  // Handle Map Resizing
   setTimeout(() => {
     if (state.map) state.map.invalidateSize();
   }, 200);
-
-  if (viewName === 'live') {
-    loadLiveBuses();
-  } else if (viewName === 'validation') {
-    loadValidationLab();
-  } else if (viewName === 'command') {
-    loadCommandStatus();
-  }
 }
 
 // 3. Journey Planner Form & Engine Call
@@ -277,27 +325,40 @@ function highlightJourneyOnMap(option) {
 
 // 4. Live DTC Bus Map
 async function loadLiveBuses() {
-  state.busLayer.clearLayers();
+  const countEl = document.getElementById('live-bus-count');
+  if (countEl) countEl.innerText = 'Polling Live Feed...';
+  
   try {
-    const res = await fetch('/api/v1/vehicles?limit=100');
-    const buses = await res.json();
-    document.getElementById('live-bus-count').innerText = `${buses.length} Active Vehicles`;
+    let res = await fetch('/api/v1/vehicles?limit=2500');
+    let buses = await res.json();
+    
+    // If no buses yet in cache, trigger on-demand refresh
+    if (!buses || buses.length === 0) {
+      await fetch('/api/v1/vehicles/refresh', { method: 'POST' });
+      res = await fetch('/api/v1/vehicles?limit=2500');
+      buses = await res.json();
+    }
+
+    state.busLayer.clearLayers();
+    if (countEl) countEl.innerText = `${buses.length.toLocaleString()} Active Vehicles`;
     
     buses.forEach(b => {
+      const color = b.freshness === 'FRESH' ? '#00e676' : (b.freshness === 'AGING' ? '#ffd600' : '#ff5252');
       const marker = L.circleMarker([b.lat, b.lon], {
-        radius: 5,
-        color: b.freshness === 'FRESH' ? '#00e676' : '#ffd600',
-        fillColor: '#000',
-        fillOpacity: 0.8,
-        weight: 2
+        radius: 4,
+        color: color,
+        fillColor: color,
+        fillOpacity: 0.85,
+        weight: 1
       }).addTo(state.busLayer);
 
       marker.bindPopup(`
-        <div style="font-size: 12px;">
-          <b>Bus:</b> ${b.vehicle_id}<br/>
+        <div style="font-size: 12px; color: #111;">
+          <b>Bus ID:</b> ${b.vehicle_id}<br/>
           <b>Route:</b> ${b.route_id || 'DTC Corridor'}<br/>
-          <b>Speed:</b> ${b.speed_kmh ? b.speed_kmh + ' km/h' : 'Stationary'}<br/>
-          <b>Freshness:</b> <span style="color: #00e676;">${b.freshness}</span> (${b.age_seconds}s ago)
+          <b>Trip:</b> ${b.trip_id || 'N/A'}<br/>
+          <b>Speed:</b> ${b.speed_kmh !== null ? b.speed_kmh + ' km/h' : 'Stationary'}<br/>
+          <b>Freshness:</b> <span style="font-weight: 700; color: ${color};">${b.freshness}</span> (${b.age_seconds}s ago)
         </div>
       `);
     });
@@ -307,6 +368,7 @@ async function loadLiveBuses() {
     }
   } catch (err) {
     console.warn("Live feed offline:", err);
+    if (countEl) countEl.innerText = 'Feed Offline';
   }
 }
 

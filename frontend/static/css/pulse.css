@@ -187,9 +187,24 @@ main.pulse-content {
   display: flex;
 }
 
-/* Split Pane: Sidebar + Map */
+#view-journey.view-pane,
+#view-live.view-pane {
+  width: 440px;
+  right: auto;
+  z-index: 10;
+}
+
+#view-timemachine.view-pane,
+#view-validation.view-pane,
+#view-command.view-pane {
+  z-index: 30;
+  background-color: var(--bg-base);
+}
+
+/* Split Pane: Sidebar + Shared Map */
 .split-sidebar {
   width: 440px;
+  height: 100%;
   background-color: var(--bg-surface);
   border-right: 1px solid var(--border-color);
   display: flex;
@@ -199,9 +214,13 @@ main.pulse-content {
   overflow-y: auto;
 }
 
-.split-map-container {
-  flex: 1;
-  position: relative;
+#shared-map-container {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 440px;
+  right: 0;
+  z-index: 1;
   background-color: #060911;
 }
 

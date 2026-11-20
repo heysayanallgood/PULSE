@@ -192,7 +192,32 @@ class RealtimeFeedService:
             return self.parse_protobuf_feed(data)
         return 0
 
-    def get_live_vehicles(self, route_id: Optional[str] = None, max_count: int = 100) -> List[Dict[str, Any]]:
+    async def start_background_poller(self):
+        """Starts periodic background polling task if live feed is enabled."""
+        if not settings.LIVE_FEED_ENABLED or not settings.OTD_API_KEY:
+            logger.info("Live feed background poller not active (disabled or missing key).")
+            return
+
+        logger.info(f"Starting Live GTFS-RT background poller (interval: {settings.LIVE_POLL_INTERVAL_SECONDS}s)")
+        # Immediate first poll
+        try:
+            count = await self.poll_once()
+            logger.info(f"Initial live GTFS-RT poll completed: {count} active vehicles parsed.")
+        except Exception as e:
+            logger.warning(f"Initial live GTFS-RT poll failed: {e}")
+
+        while True:
+            try:
+                await asyncio.sleep(settings.LIVE_POLL_INTERVAL_SECONDS)
+                count = await self.poll_once()
+                logger.debug(f"Live GTFS-RT polled: {count} active vehicles.")
+            except asyncio.CancelledError:
+                logger.info("Live GTFS-RT background poller cancelled.")
+                break
+            except Exception as e:
+                logger.warning(f"Error in live GTFS-RT poll cycle: {e}")
+
+    def get_live_vehicles(self, route_id: Optional[str] = None, max_count: int = 1500) -> List[Dict[str, Any]]:
         """Returns list of active, non-expired vehicles."""
         now = time.time()
         result = []
