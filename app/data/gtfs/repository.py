@@ -44,20 +44,78 @@ class GTFSRepository:
         self._spatial_index = StopSpatialIndex(stops)
         logger.info(f"Loaded {len(stops)} stops into StopSpatialIndex.")
 
-    def search_stops(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Searches stops by name or stop_id using case-insensitive pattern matching."""
+    def search_stops(self, query: str, limit: int = 15) -> List[Dict[str, Any]]:
+        """
+        Searches stops by name or stop_id across all 6,862 Delhi stops.
+        Applies case-insensitive pattern matching, prefix ranking, and duplicate disambiguation.
+        """
         con = self._get_connection()
-        q = f"%{query.strip()}%"
+        clean_q = query.strip()
+        q_like = f"%{clean_q}%"
+        q_prefix = f"{clean_q}%"
         df = con.execute("""
             SELECT stop_id, stop_code, stop_name, stop_lat, stop_lon
             FROM stops
             WHERE stop_name ILIKE ? OR stop_id = ?
             ORDER BY 
-                CASE WHEN stop_name ILIKE ? THEN 1 ELSE 2 END,
-                stop_name
+                CASE 
+                    WHEN LOWER(stop_name) = LOWER(?) THEN 1
+                    WHEN stop_name ILIKE ? THEN 2
+                    WHEN stop_id = ? THEN 3
+                    ELSE 4
+                END,
+                LENGTH(stop_name) ASC,
+                stop_name ASC
             LIMIT ?;
-        """, [q, query.strip(), f"{query.strip()}%", limit]).fetchdf()
-        return df.to_dict(orient="records")
+        """, [q_like, clean_q, clean_q, q_prefix, clean_q, limit]).fetchdf()
+        
+        records = df.to_dict(orient="records")
+        for r in records:
+            r["stop_lat"] = round(float(r["stop_lat"]), 6)
+            r["stop_lon"] = round(float(r["stop_lon"]), 6)
+            r["display_name"] = f"{r['stop_name']} [{r['stop_id']}]"
+        return records
+
+    def get_clipped_shape_coordinates(
+        self,
+        shape_id: Optional[str],
+        board_lat: float,
+        board_lon: float,
+        alight_lat: float,
+        alight_lon: float
+    ) -> List[List[float]]:
+        """
+        Retrieves ordered real GTFS road coordinates for a bus corridor segment between
+        boarding and alighting stops, clipping the route shape points.
+        """
+        fallback = [[round(board_lat, 6), round(board_lon, 6)], [round(alight_lat, 6), round(alight_lon, 6)]]
+        if not shape_id:
+            return fallback
+
+        con = self._get_connection()
+        pts = con.execute("""
+            SELECT shape_pt_lat, shape_pt_lon
+            FROM shapes
+            WHERE shape_id = ?
+            ORDER BY shape_pt_sequence ASC;
+        """, [shape_id]).fetchall()
+
+        if not pts or len(pts) < 2:
+            return fallback
+
+        def dist_sq(p, lat, lon):
+            return (p[0] - lat)**2 + (p[1] - lon)**2
+
+        idx_board = min(range(len(pts)), key=lambda i: dist_sq(pts[i], board_lat, board_lon))
+        idx_alight = min(range(len(pts)), key=lambda i: dist_sq(pts[i], alight_lat, alight_lon))
+
+        if idx_board > idx_alight:
+            idx_board, idx_alight = idx_alight, idx_board
+
+        clipped = [[round(float(p[0]), 6), round(float(p[1]), 6)] for p in pts[idx_board:idx_alight + 1]]
+        if len(clipped) < 2:
+            return fallback
+        return clipped
 
     def get_stop_by_id(self, stop_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves stop details by stop_id."""

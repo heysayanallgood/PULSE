@@ -199,17 +199,35 @@ class RaptorRouter:
                     "duration_seconds": walk_first["duration_s"],
                     "duration_minutes": round(walk_first["duration_s"] / 60.0, 1),
                     "walk_type": walk_first.get("walk_type", "APPROXIMATED_WALK"),
+                    "geometry": walk_first.get("geometry", [
+                        [float(walk_first.get("start_lat", orig_stop["stop_lat"])), float(walk_first.get("start_lon", orig_stop["stop_lon"]))],
+                        [float(orig_stop["stop_lat"]), float(orig_stop["stop_lon"])]
+                    ]),
                     "confidence": "HIGH"
                 })
 
+            bus_geom = gtfs_repo.get_clipped_shape_coordinates(
+                shape_id=row["shape_id"],
+                board_lat=float(orig_stop["stop_lat"]),
+                board_lon=float(orig_stop["stop_lon"]),
+                alight_lat=float(dest_stop["stop_lat"]),
+                alight_lon=float(dest_stop["stop_lon"])
+            )
+
             legs.append({
                 "type": "BUS",
-                "route_id": row["route_id"],
+                "route_id": str(row["route_id"]),
                 "route_name": row["route_short_name"] or row["route_long_name"],
                 "boarding_stop": orig_stop["stop_name"],
                 "boarding_stop_id": orig_stop["stop_id"],
+                "boarding_lat": float(orig_stop["stop_lat"]),
+                "boarding_lon": float(orig_stop["stop_lon"]),
                 "alighting_stop": dest_stop["stop_name"],
                 "alighting_stop_id": dest_stop["stop_id"],
+                "alighting_lat": float(dest_stop["stop_lat"]),
+                "alighting_lon": float(dest_stop["stop_lon"]),
+                "shape_id": row["shape_id"],
+                "geometry": bus_geom,
                 "stops_traversed": int(row["dest_seq"] - row["origin_seq"]),
                 "distance_km": round(pred["total_distance_m"] / 1000.0, 2),
                 "departure_time": self._format_time_s(actual_board_s),
@@ -228,6 +246,10 @@ class RaptorRouter:
                     "duration_seconds": walk_final["duration_s"],
                     "duration_minutes": round(walk_final["duration_s"] / 60.0, 1),
                     "walk_type": walk_final.get("walk_type", "APPROXIMATED_WALK"),
+                    "geometry": walk_final.get("geometry", [
+                        [float(dest_stop["stop_lat"]), float(dest_stop["stop_lon"])],
+                        [float(walk_final.get("end_lat", dest_stop["stop_lat"])), float(walk_final.get("end_lon", dest_stop["stop_lon"]))]
+                    ]),
                     "confidence": "HIGH"
                 })
 
@@ -362,41 +384,107 @@ class RaptorRouter:
             total_walk_s = walk_first["duration_s"] + walk_final["duration_s"]
             total_wait_s = wait1_s + xfer_buffer_s + wait2_s
 
-            legs = [
-                {
-                    "type": "BUS",
-                    "route_id": row["r1_id"],
-                    "route_name": row["r1_name"],
-                    "boarding_stop": orig_stop["stop_name"],
-                    "alighting_stop": xfer_stop_data["stop_name"],
-                    "stops_traversed": int(row["xfer1_seq"] - row["orig_seq"]),
-                    "distance_km": round(pred1["total_distance_m"] / 1000.0, 2),
-                    "departure_time": self._format_time_s(board1_s),
-                    "predicted_duration_minutes": round(tt1_s / 60.0, 1),
-                    "confidence": pred1["confidence"],
-                    "provenance": pred1["provenance"]
-                },
-                {
-                    "type": "TRANSFER",
-                    "transfer_stop": xfer_stop_data["stop_name"],
-                    "buffer_minutes": round(xfer_buffer_s / 60.0, 1),
-                    "expected_wait_minutes": round(wait2_s / 60.0, 1),
-                    "instruction": f"Change buses at {xfer_stop_data['stop_name']} to Route {row['r2_name']}"
-                },
-                {
-                    "type": "BUS",
-                    "route_id": row["r2_id"],
-                    "route_name": row["r2_name"],
-                    "boarding_stop": xfer_stop_data["stop_name"],
-                    "alighting_stop": dest_stop["stop_name"],
-                    "stops_traversed": int(row["dest_seq"] - row["xfer2_seq"]),
-                    "distance_km": round(pred2["total_distance_m"] / 1000.0, 2),
-                    "departure_time": self._format_time_s(board2_s),
-                    "predicted_duration_minutes": round(tt2_s / 60.0, 1),
-                    "confidence": pred2["confidence"],
-                    "provenance": pred2["provenance"]
-                }
-            ]
+            legs = []
+            if walk_first["duration_s"] > 0:
+                legs.append({
+                    "type": "WALK",
+                    "instruction": f"Walk to {orig_stop['stop_name']}",
+                    "distance_m": walk_first["distance_m"],
+                    "duration_seconds": walk_first["duration_s"],
+                    "duration_minutes": round(walk_first["duration_s"] / 60.0, 1),
+                    "walk_type": walk_first.get("walk_type", "APPROXIMATED_WALK"),
+                    "geometry": walk_first.get("geometry", [
+                        [float(walk_first.get("start_lat", orig_stop["stop_lat"])), float(walk_first.get("start_lon", orig_stop["stop_lon"]))],
+                        [float(orig_stop["stop_lat"]), float(orig_stop["stop_lon"])]
+                    ]),
+                    "confidence": "HIGH"
+                })
+
+            bus1_geom = gtfs_repo.get_clipped_shape_coordinates(
+                shape_id=row["shape1"],
+                board_lat=float(orig_stop["stop_lat"]),
+                board_lon=float(orig_stop["stop_lon"]),
+                alight_lat=float(xfer_stop_data.get("stop_lat", orig_stop["stop_lat"])),
+                alight_lon=float(xfer_stop_data.get("stop_lon", orig_stop["stop_lon"]))
+            )
+
+            legs.append({
+                "type": "BUS",
+                "route_id": str(row["r1_id"]),
+                "route_name": row["r1_name"],
+                "boarding_stop": orig_stop["stop_name"],
+                "boarding_stop_id": orig_stop["stop_id"],
+                "boarding_lat": float(orig_stop["stop_lat"]),
+                "boarding_lon": float(orig_stop["stop_lon"]),
+                "alighting_stop": xfer_stop_data["stop_name"],
+                "alighting_stop_id": row["xfer_id"],
+                "alighting_lat": float(xfer_stop_data.get("stop_lat", orig_stop["stop_lat"])),
+                "alighting_lon": float(xfer_stop_data.get("stop_lon", orig_stop["stop_lon"])),
+                "shape_id": row["shape1"],
+                "geometry": bus1_geom,
+                "stops_traversed": int(row["xfer1_seq"] - row["orig_seq"]),
+                "distance_km": round(pred1["total_distance_m"] / 1000.0, 2),
+                "departure_time": self._format_time_s(board1_s),
+                "predicted_duration_minutes": round(tt1_s / 60.0, 1),
+                "confidence": pred1["confidence"],
+                "provenance": pred1["provenance"]
+            })
+
+            legs.append({
+                "type": "TRANSFER",
+                "transfer_stop": xfer_stop_data["stop_name"],
+                "transfer_stop_id": row["xfer_id"],
+                "transfer_lat": float(xfer_stop_data.get("stop_lat", orig_stop["stop_lat"])),
+                "transfer_lon": float(xfer_stop_data.get("stop_lon", orig_stop["stop_lon"])),
+                "buffer_minutes": round(xfer_buffer_s / 60.0, 1),
+                "expected_wait_minutes": round(wait2_s / 60.0, 1),
+                "instruction": f"Change buses at {xfer_stop_data['stop_name']} to Route {row['r2_name']}"
+            })
+
+            bus2_geom = gtfs_repo.get_clipped_shape_coordinates(
+                shape_id=row["shape2"],
+                board_lat=float(xfer_stop_data.get("stop_lat", dest_stop["stop_lat"])),
+                board_lon=float(xfer_stop_data.get("stop_lon", dest_stop["stop_lon"])),
+                alight_lat=float(dest_stop["stop_lat"]),
+                alight_lon=float(dest_stop["stop_lon"])
+            )
+
+            legs.append({
+                "type": "BUS",
+                "route_id": str(row["r2_id"]),
+                "route_name": row["r2_name"],
+                "boarding_stop": xfer_stop_data["stop_name"],
+                "boarding_stop_id": row["xfer_id"],
+                "boarding_lat": float(xfer_stop_data.get("stop_lat", dest_stop["stop_lat"])),
+                "boarding_lon": float(xfer_stop_data.get("stop_lon", dest_stop["stop_lon"])),
+                "alighting_stop": dest_stop["stop_name"],
+                "alighting_stop_id": dest_stop["stop_id"],
+                "alighting_lat": float(dest_stop["stop_lat"]),
+                "alighting_lon": float(dest_stop["stop_lon"]),
+                "shape_id": row["shape2"],
+                "geometry": bus2_geom,
+                "stops_traversed": int(row["dest_seq"] - row["xfer2_seq"]),
+                "distance_km": round(pred2["total_distance_m"] / 1000.0, 2),
+                "departure_time": self._format_time_s(board2_s),
+                "predicted_duration_minutes": round(tt2_s / 60.0, 1),
+                "confidence": pred2["confidence"],
+                "provenance": pred2["provenance"]
+            })
+
+            if walk_final["duration_s"] > 0:
+                legs.append({
+                    "type": "WALK",
+                    "instruction": f"Walk from {dest_stop['stop_name']} to destination",
+                    "distance_m": walk_final["distance_m"],
+                    "duration_seconds": walk_final["duration_s"],
+                    "duration_minutes": round(walk_final["duration_s"] / 60.0, 1),
+                    "walk_type": walk_final.get("walk_type", "APPROXIMATED_WALK"),
+                    "geometry": walk_final.get("geometry", [
+                        [float(dest_stop["stop_lat"]), float(dest_stop["stop_lon"])],
+                        [float(walk_final.get("end_lat", dest_stop["stop_lat"])), float(walk_final.get("end_lon", dest_stop["stop_lon"]))]
+                    ]),
+                    "confidence": "HIGH"
+                })
 
             opt = RaptorJourneyOption(
                 arrival_time_s=arrival_s,

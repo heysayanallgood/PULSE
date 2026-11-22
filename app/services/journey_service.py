@@ -23,41 +23,59 @@ class JourneyPlanningService:
         location_input: str
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """
-        Resolves a location string (either "lat,lon" or stop name search query)
+        Resolves a location string (either "lat,lon", "Stop Name [ID]", stop name, or place)
         into a resolved name and a list of candidate boarding/alighting stops.
         """
         loc_str = location_input.strip()
         
-        # Check if coordinates "lat,lon" e.g. "28.6675, 77.2281"
+        # 1. Check if coordinates "lat,lon" e.g. "28.6675, 77.2281"
         coord_match = re.match(r"^([-+]?\d*\.?\d+)\s*,\s*([-+]?\d*\.?\d+)$", loc_str)
         if coord_match:
             lat = float(coord_match.group(1))
             lon = float(coord_match.group(2))
+            
+            # Check bounding box
+            if not (28.2 <= lat <= 28.95 and 76.8 <= lon <= 77.55):
+                logger.warning(f"Coordinate ({lat}, {lon}) is outside Delhi transit bounds.")
+                return f"Out-of-Bounds ({lat:.4f}, {lon:.4f})", []
+
             nearby = gtfs_repo.find_nearby_stops(lat, lon, radius_m=settings.MAX_WALK_RADIUS_M, limit=5)
             if not nearby:
-                # Expand radius to 1500m
+                # Expand to 1500m (walk limit)
                 nearby = gtfs_repo.find_nearby_stops(lat, lon, radius_m=1500.0, limit=5)
             
-            # Attach walking leg from coordinate to each stop
             for s in nearby:
-                w = calculate_walking_leg(lat, lon, s["stop_lat"], s["stop_lon"])
+                w = calculate_walking_leg(lat, lon, float(s["stop_lat"]), float(s["stop_lon"]))
                 s["walk_leg"] = w
 
             name = f"Location ({lat:.4f}, {lon:.4f})"
             return name, nearby
 
-        # Stop name text search
+        # 2. Check for stop ID in brackets e.g. "Kashmere Gate [7571]"
+        id_match = re.search(r"\[(\w+)\]", loc_str)
+        if id_match:
+            extracted_id = id_match.group(1)
+            stop = gtfs_repo.get_stop_by_id(extracted_id)
+            if stop:
+                stop["walk_leg"] = {"distance_m": 0.0, "duration_s": 0, "walk_type": "SAME_PLATFORM"}
+                return stop["stop_name"], [stop]
+
+        # 3. Direct stop_id lookup
+        if loc_str.isdigit():
+            stop = gtfs_repo.get_stop_by_id(loc_str)
+            if stop:
+                stop["walk_leg"] = {"distance_m": 0.0, "duration_s": 0, "walk_type": "SAME_PLATFORM"}
+                return stop["stop_name"], [stop]
+
+        # 4. Stop name text search in GTFS index
         stops = gtfs_repo.search_stops(loc_str, limit=5)
-        if not stops:
-            # Fallback fuzzy matching
-            return loc_str, []
+        if stops:
+            primary_stop = stops[0]
+            for s in stops:
+                s["walk_leg"] = {"distance_m": 0.0, "duration_s": 0, "walk_type": "SAME_PLATFORM"}
+            return primary_stop["stop_name"], stops
 
-        primary_stop = stops[0]
-        # Attach 0-distance walking leg for direct stop boards
-        for s in stops:
-            s["walk_leg"] = {"distance_m": 0.0, "duration_s": 0, "walk_type": "SAME_PLATFORM"}
-
-        return primary_stop["stop_name"], stops
+        return loc_str, []
 
     def plan_journey(
         self,

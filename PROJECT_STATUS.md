@@ -2,9 +2,9 @@
 **Project:** Predictive Urban Mobility & Live Spatiotemporal Engine (PULSE)  
 **Team:** HopCode | *"The City Moves. We Decode Its Pulse."*  
 **Hackathon:** Transport Stack Hackathon 2026 — Phase 1, Problem 1  
-**Status:** **100% COMPLETE & PRODUCTION READY**  
-**Last Updated:** 2026-11-20  
-**Overall System Health:** All Systems Operational (Green) — 35/35 Tests Passing
+**Status:** **100% COMPLETE & PRODUCTION READY (ADVANCED MAP & SEARCH UPGRADE)**  
+**Last Updated:** 2026-11-22  
+**Overall System Health:** All Systems Operational (Green) — 42/42 Tests Passing
 
 ---
 
@@ -38,14 +38,18 @@
 | **Phase 9** | Interactive Web Interface & UX | **COMPLETED** | `frontend/index.html`, `frontend/static/js/app.js`, `pulse.css` |
 | **Phase 10** | End-to-End Workflow Integration | **COMPLETED** | Full pipeline verified with multi-criteria routing & time comparison |
 | **Phase 11** | Validation, Benchmarking & Evaluation | **COMPLETED** | `docs/VALIDATION_REPORT.md` (MAE 1.9m vs. 34.9m timetable baseline) |
-| **Phase 12** | Performance, Reliability & Security | **COMPLETED** | Sub-200ms query latency, zero secret leakage, 35/35 tests passing |
+| **Phase 12** | Performance, Reliability & Security | **COMPLETED** | Sub-200ms query latency, zero secret leakage, 42/42 tests passing |
 | **Phase 13** | Documentation & Hackathon Submission | **COMPLETED** | `README.md`, `docs/DEMO_SCRIPT.md`, `docs/API_REFERENCE.md` |
+| **Upgrade** | Advanced Map, Rapido SVGs & Search | **COMPLETED** | `docs/ADVANCED_MAP_AND_CITYWIDE_SEARCH.md` (Positron/Voyager/Satellite, 2D SVGs, Clusters, 6.8K stops) |
 
 ---
 
 ## Operational Verification Metrics
-- **Pytest Suite**: 35 passed, 0 failed in 19.20s.
+- **Pytest Suite**: 42 passed, 0 failed in 61.99s.
 - **Operational Databases**:
   - `gtfs.duckdb`: 170 MB (6,862 stops, 2,574 routes, 80,357 trips, 163,018 segments).
   - `travel_time.duckdb`: 2.05 GB (31,299,456 parametric segment distributions).
+- **Basemaps Enabled**: CARTO Positron (Default Light), CARTO Voyager, CARTO Dark Matter, MapTiler/Esri Satellite, OpenStreetMap.
+- **Stop Coverage**: Complete search access to all 6,862 DTC bus stops with disambiguation and Geoapify place autocomplete.
+- **Live Vehicle Markers**: Original top-down 2D bus SVGs with bearing rotation, freshness halos, and clustering for 2,500+ active buses.
 - **Disk Isolation**: Host `C:` consumed 0 MB of application caches. All caches and DBs isolated to external drive `E:\Pulse`.

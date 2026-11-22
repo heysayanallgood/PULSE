@@ -7,6 +7,9 @@
   
   <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <!-- Leaflet MarkerCluster CSS -->
+  <link rel="stylesheet" href="/static/vendor/MarkerCluster.css">
+  <link rel="stylesheet" href="/static/vendor/MarkerCluster.Default.css">
   
   <!-- Google Fonts: Inter -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -59,6 +62,12 @@
   <!-- Main Content Container -->
   <main class="pulse-content">
 
+    <!-- Map Selection Banner (active when user picks a location on the map) -->
+    <div id="map-selection-banner" class="map-selection-banner" style="display: none;">
+      <span id="map-selection-text">📍 Click anywhere on the map to set Origin...</span>
+      <button type="button" id="btn-cancel-pick" class="btn-text-sm" style="color: #ff5252; margin-left: 8px;">✕ Cancel</button>
+    </div>
+
     <!-- SHARED LEAFLET MAP ELEMENT (VISIBLE ON JOURNEY & LIVE VIEWS) -->
     <div id="shared-map-container">
       <div id="map-element"></div>
@@ -71,24 +80,32 @@
         <div class="query-card">
           <form id="journey-form">
             <div class="form-group">
-              <label class="form-label" for="input-origin">Origin (Stop Name or Coordinates)</label>
-              <div class="input-with-icon">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <label class="form-label" for="input-origin" style="margin-bottom: 0;">Origin</label>
+                <button type="button" id="btn-pick-origin" class="btn-text-sm" title="Click on map to select origin">📍 Pick on Map</button>
+              </div>
+              <div class="input-with-icon autocomplete-wrapper">
                 <span class="input-icon">🟢</span>
-                <input type="text" id="input-origin" class="pulse-input" placeholder="e.g. Kashmere Gate or 28.6675, 77.2281" value="Kashmere Gate" required>
+                <input type="text" id="input-origin" class="pulse-input" placeholder="Search 6,862 Delhi stops or places..." value="Kashmere Gate" autocomplete="off" required>
+                <div id="origin-suggestions" class="autocomplete-dropdown" style="display: none;"></div>
               </div>
             </div>
 
-            <div style="display: flex; justify-content: flex-end; margin: -6px 0 6px 0;">
+            <div style="display: flex; justify-content: flex-end; margin: -4px 0 6px 0;">
               <button type="button" id="swap-locations-btn" style="background: none; border: none; color: var(--accent-cyan); font-size: 11px; cursor: pointer;">
                 ⇅ Swap Locations
               </button>
             </div>
 
             <div class="form-group">
-              <label class="form-label" for="input-dest">Destination (Stop Name or Coordinates)</label>
-              <div class="input-with-icon">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <label class="form-label" for="input-dest" style="margin-bottom: 0;">Destination</label>
+                <button type="button" id="btn-pick-dest" class="btn-text-sm" title="Click on map to select destination">📍 Pick on Map</button>
+              </div>
+              <div class="input-with-icon autocomplete-wrapper">
                 <span class="input-icon">🔴</span>
-                <input type="text" id="input-dest" class="pulse-input" placeholder="e.g. Nehru Place or 28.5492, 77.2526" value="Nehru Place" required>
+                <input type="text" id="input-dest" class="pulse-input" placeholder="Search 6,862 Delhi stops or places..." value="Nehru Place" autocomplete="off" required>
+                <div id="dest-suggestions" class="autocomplete-dropdown" style="display: none;"></div>
               </div>
             </div>
 
@@ -152,6 +169,14 @@
               <span class="metric-label">Synthetic Data</span>
               <span class="metric-value" style="color: var(--accent-cyan);">0%</span>
             </div>
+          </div>
+          <div class="live-legend-strip">
+            <div class="legend-item"><span class="legend-swatch fresh"></span> FRESH (&le;60s)</div>
+            <div class="legend-item"><span class="legend-swatch aging"></span> AGING (61-90s)</div>
+            <div class="legend-item"><span class="legend-swatch stale"></span> STALE (&gt;90s)</div>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">
+            💡 <em>Zoom in to zoom 14+ to see individual Rapido-style 2D buses rotated by vehicle bearing!</em>
           </div>
         </div>
         <div style="padding: 20px; font-size: 12px; color: var(--text-muted); line-height: 1.6;">
@@ -298,6 +323,7 @@
             <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/ready" target="_blank" style="color: #fff;">/api/v1/ready</a> — Storage readiness probe</li>
             <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/system/status" target="_blank" style="color: #fff;">/api/v1/system/status</a> — Dataset and system health</li>
             <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/stops/search?q=kashmere" target="_blank" style="color: #fff;">/api/v1/stops/search</a> — Full-text bus stop search</li>
+            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/places/autocomplete?q=AIIMS" target="_blank" style="color: #fff;">/api/v1/places/autocomplete</a> — Geocoded places & stop autocomplete</li>
             <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/journeys?from=Kashmere%20Gate&to=Nehru%20Place&depart_at=08:30:00" target="_blank" style="color: #fff;">/api/v1/journeys</a> — Multi-criteria RAPTOR journey planner</li>
             <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/analytics/time-comparison?route_id=1728&shape_id=shp_3_2436&from_dist=0&to_dist=15000" target="_blank" style="color: #fff;">/api/v1/analytics/time-comparison</a> — 24-hour congestion comparison</li>
             <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/validation/summary" target="_blank" style="color: #fff;">/api/v1/validation/summary</a> — Model accuracy & benchmark summary</li>
@@ -311,6 +337,8 @@
 
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- Leaflet MarkerCluster JS -->
+  <script src="/static/vendor/leaflet.markercluster.js"></script>
   <!-- PULSE Application Logic -->
   <script src="/static/js/app.js"></script>
 </body>

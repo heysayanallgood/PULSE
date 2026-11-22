@@ -24,6 +24,7 @@ from app.api.v1.journeys import router as journeys_router
 from app.api.v1.vehicles import router as vehicles_router
 from app.api.v1.analytics import router as analytics_router
 from app.api.v1.validation import router as validation_router
+from app.api.v1.places import router as places_router
 
 _START_TIME = time.time()
 
@@ -81,6 +82,7 @@ app.include_router(journeys_router, prefix="/api/v1")
 app.include_router(vehicles_router, prefix="/api/v1")
 app.include_router(analytics_router, prefix="/api/v1")
 app.include_router(validation_router, prefix="/api/v1")
+app.include_router(places_router, prefix="/api/v1")
 
 # Mount Frontend Static Files if directory exists
 static_path = Path("E:/Pulse/frontend/static")
@@ -95,7 +97,15 @@ def index_page():
     if index_file.exists():
         html = index_file.read_text(encoding="utf-8")
         carto_key = settings.CARTO_API_KEY or ""
-        config_script = f"<script>window.PULSE_CONFIG = {{ cartoApiKey: '{carto_key}', liveEnabled: {'true' if settings.LIVE_FEED_ENABLED else 'false'} }};</script>"
+        maptiler_key = settings.MAPTILER_API_KEY or ""
+        config_script = (
+            f"<script>window.PULSE_CONFIG = {{"
+            f" cartoApiKey: '{carto_key}',"
+            f" maptilerApiKey: '{maptiler_key}',"
+            f" geoapifyEnabled: {'true' if settings.GEOAPIFY_API_KEY else 'false'},"
+            f" liveEnabled: {'true' if settings.LIVE_FEED_ENABLED else 'false'}"
+            f" }};</script>"
+        )
         if "</head>" in html:
             html = html.replace("</head>", f"  {config_script}\n</head>")
         return HTMLResponse(content=html)
@@ -107,6 +117,8 @@ def get_public_config() -> Dict[str, Any]:
     """Returns safe client-side UI configurations (basemap keys, intervals)."""
     return {
         "carto_api_key": settings.CARTO_API_KEY,
+        "maptiler_api_key": settings.MAPTILER_API_KEY,
+        "geoapify_enabled": bool(settings.GEOAPIFY_API_KEY),
         "live_feed_enabled": settings.LIVE_FEED_ENABLED,
         "poll_interval_seconds": settings.LIVE_POLL_INTERVAL_SECONDS,
         "app_version": settings.APP_VERSION

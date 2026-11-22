@@ -104,3 +104,24 @@
 - [x] Author hackathon presentation script `docs/DEMO_SCRIPT.md`
 - [x] Author authoritative `README.md`
 - [x] Verify all 35 unit and integration tests passing (`pytest tests/ -v`)
+
+### Phase 11: Advanced Map Experience, Rapido 2D Bus SVGs & Citywide Search Upgrade
+- [x] Integrate clean, light CARTO Positron as default basemap
+- [x] Add Leaflet Layer Control with Positron, Voyager, Dark Matter, Satellite (MapTiler/Esri), and OpenStreetMap
+- [x] Ensure private Delhi OTD API key is never exposed to client-side code
+- [x] Create original Rapido-inspired top-down 2D city bus SVG icons with windshield, roof AC vents, headlights, and bumpers
+- [x] Rotate bus icons dynamically according to actual vehicle bearing (`b.bearing`)
+- [x] Add luminous freshness halos (`FRESH` green, `AGING` amber, `STALE` red)
+- [x] Implement marker clustering via `Leaflet.markercluster` (smooth clustering at zoom < 14, unclustering at zoom >= 14)
+- [x] Implement in-place marker mutation for 2,500+ active DTC buses to maintain 60fps performance
+- [x] Connect Journey Planner to all 6,862 imported Delhi GTFS bus stops
+- [x] Implement duplicate stop name disambiguation (`[stop_id]`) and prefix-based search ranking
+- [x] Implement debounced autocomplete dropdown for Origin and Destination
+- [x] Support arbitrary coordinate inputs (`lat, lon`) within Delhi NCR bounding box
+- [x] Add interactive "Pick on Map" mode and map-click context popups for setting Origin & Destination
+- [x] Implement server-side Geoapify Address Autocomplete proxy with rate-limit protection cache and GTFS fallback
+- [x] Implement true GTFS shape polyline clipping (`gtfs_repo.get_clipped_shape_coordinates`) displaying actual road geometry
+- [x] Differentiate walking legs (dashed lines) from bus transit legs (vibrant solid route polylines)
+- [x] Add comprehensive integration tests in `tests/integration/test_advanced_map_search.py`
+- [x] Verify all 42 tests passing (`pytest tests/ -v`)
+- [x] Author comprehensive documentation in `docs/ADVANCED_MAP_AND_CITYWIDE_SEARCH.md`

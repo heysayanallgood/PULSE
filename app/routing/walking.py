@@ -45,9 +45,14 @@ def calculate_walking_leg(
     confidence = "HIGH" if network_dist_m <= 800.0 else ("MEDIUM" if network_dist_m <= 1500.0 else "LOW")
 
     return {
+        "start_lat": round(start_lat, 6),
+        "start_lon": round(start_lon, 6),
+        "end_lat": round(end_lat, 6),
+        "end_lon": round(end_lon, 6),
         "distance_m": round(network_dist_m, 1),
         "duration_s": duration_s,
         "duration_minutes": round(duration_s / 60.0, 1),
         "walk_type": "APPROXIMATED_WALK",
-        "confidence": confidence
+        "confidence": confidence,
+        "geometry": [[round(start_lat, 6), round(start_lon, 6)], [round(end_lat, 6), round(end_lon, 6)]]
     }
