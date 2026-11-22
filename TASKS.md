@@ -158,3 +158,17 @@
   - [x] `docs/LIVE_VEHICLE_RENDERING.md`
   - [x] `docs/END_TO_END_TEST_REPORT.md`
   - [x] `docs/KNOWN_LIMITATIONS.md`
+
+### Phase 13: External Edge Browser Synchronization & Runtime Repair
+- [x] Phase 0: Protect running FastAPI server (PID 6992 on 127.0.0.1:8000, 0 uncommitted changes lost, no WinError 10013)
+- [x] Phase 1: Verify actual running server, served HTTP responses, content lengths, hashes, and client config endpoints
+- [x] Phase 2: Diagnose true browser failure causes (A through O) in Microsoft Edge; identified root cause in heuristic disk caching of unversioned static assets and missing localStorage migration
+- [x] Phase 3: Implement asset versioning (`?v=20261122-v2.1.0`), HTML cache-control meta headers, and `localStorage` migration resetting dark basemap defaults to CARTO Positron
+- [x] Phase 4: Verify Leaflet map initialization, container sizing, zero duplicate instances, and 6-layer switcher event wiring
+- [x] Phase 5: Complete MapTiler Satellite Plain and Satellite Hybrid live tile loading with attribution and 200 OK responses
+- [x] Phase 6: Verify top-down 2D SVG bus markers in Edge DOM (4 wheels, headlights, destination display, windshield gradient, freshness classes, 0 circular dots)
+- [x] Phase 7: Execute full Microsoft Edge automated acceptance suite (`scripts/verify_external_edge.py`) covering Tests A through F
+- [x] Phase 8: Audit API keys (OTD private backend-only, Geoapify behind proxy, MapTiler & CARTO restricted client keys, .env ignored)
+- [x] Phase 9: Implement surgical repairs in `frontend/index.html` and `frontend/static/js/app.js` without server downtime
+- [x] Phase 10: Produce authoritative technical report (`docs/EXTERNAL_EDGE_REPAIR_REPORT.md`) and store 9 high-resolution Edge screenshots in `docs/evidence/external-edge/`
+- [x] Phase 11: Fulfill all acceptance criteria with 0 console errors in Microsoft Edge and 53/53 pytest backend tests passing

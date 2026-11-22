@@ -1,0 +1,97 @@
+{
+  "browser": "Microsoft Edge",
+  "url": "http://127.0.0.1:8000/",
+  "tests": {
+    "Test_A_Initial_Page": {
+      "status": "PASSED",
+      "build_version": "20261122-v2.1.0",
+      "active_layer": "positron",
+      "layer_selector_visible": true
+    },
+    "Test_B_Map_Layers": {
+      "status": "PASSED",
+      "layers": {
+        "satellite-plain": {
+          "active": "satellite-plain",
+          "status_200_tiles": 12
+        },
+        "satellite-hybrid": {
+          "active": "satellite-hybrid",
+          "status_200_tiles": 24
+        },
+        "voyager": {
+          "active": "voyager",
+          "status_200_tiles": 70
+        },
+        "dark": {
+          "active": "dark",
+          "status_200_tiles": 105
+        },
+        "osm": {
+          "active": "osm",
+          "status_200_tiles": 35
+        },
+        "positron": {
+          "active": "positron",
+          "status_200_tiles": 105
+        }
+      }
+    },
+    "Test_C_Pick_On_Map": {
+      "status": "PASSED",
+      "picked_origin": "28.6828, 77.1172",
+      "picked_destination": "28.6105, 77.1378"
+    },
+    "Test_D_Dynamic_Routing": {
+      "status": "PASSED",
+      "route_a_cards": 3,
+      "route_b_cards": 3
+    },
+    "Test_E_Live_SVG_Buses": {
+      "status": "PASSED",
+      "marker_analysis": {
+        "total_svg_markers": 29,
+        "circle_marker_count": 0,
+        "has_wheels": true,
+        "has_chassis": true,
+        "has_headlights": true,
+        "has_windshield": true,
+        "has_dest_strip": true,
+        "has_mirrors": true,
+        "sample_status_classes": [
+          "pulse-bus-rotate rapido-bus-icon status-fresh freshness-fresh",
+          "pulse-bus-rotate rapido-bus-icon status-fresh freshness-fresh",
+          "pulse-bus-rotate rapido-bus-icon status-fresh freshness-fresh",
+          "pulse-bus-rotate rapido-bus-icon status-fresh freshness-fresh",
+          "pulse-bus-rotate rapido-bus-icon status-fresh freshness-fresh",
+          "pulse-bus-rotate rapido-bus-icon status-fresh freshness-fresh",
+          "pulse-bus-rotate rapido-bus-icon status-stale freshness-stale",
+          "pulse-bus-rotate rapido-bus-icon status-fresh freshness-fresh",
+          "pulse-bus-rotate rapido-bus-icon status-fresh freshness-fresh",
+          "pulse-bus-rotate rapido-bus-icon status-fresh freshness-fresh"
+        ],
+        "sample_snippet": "\n    <div class=\"pulse-bus-rotate rapido-bus-icon status-fresh freshness-fresh\" style=\"transform: rotate(0deg); transform-origin: center center;\">\n      <svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 120\" width=\"32\" height=\"60\" shape-rendering=\"geometricPrecision\">\n        <defs>\n          <filter id=\"bus-glow-FRESH\" x=\"-30%\" y=\"-30%\" width=\"160%\" height=\"160%\">\n            <feDropShadow "
+      }
+    },
+    "Test_F_Browser_Refresh": {
+      "status": "PASSED",
+      "layer_after_reload": "satellite-hybrid",
+      "layer_after_hard_reload": "positron"
+    }
+  },
+  "evidence_files": [
+    "E:\\Pulse\\docs\\evidence\\external-edge\\01_external_edge_journey_planner.png",
+    "E:\\Pulse\\docs\\evidence\\external-edge\\02_visible_map_selector.png",
+    "E:\\Pulse\\docs\\evidence\\external-edge\\03_satellite_plain.png",
+    "E:\\Pulse\\docs\\evidence\\external-edge\\04_satellite_hybrid.png",
+    "E:\\Pulse\\docs\\evidence\\external-edge\\06_working_pick_on_map.png",
+    "E:\\Pulse\\docs\\evidence\\external-edge\\07_dynamic_route_a.png",
+    "E:\\Pulse\\docs\\evidence\\external-edge\\08_dynamic_route_b.png",
+    "E:\\Pulse\\docs\\evidence\\external-edge\\05_actual_svg_buses_high_zoom.png",
+    "E:\\Pulse\\docs\\evidence\\external-edge\\09_browser_refresh_persistence.png"
+  ],
+  "page_errors": [],
+  "failed_requests": [
+    "http://127.0.0.1:8000/api/v1/journeys?from=Anand%20Vihar%20ISBT&to=Badarpur%20Border&depart_at=08%3A30 - net::ERR_ABORTED"
+  ]
+}

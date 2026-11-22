@@ -5,6 +5,9 @@
  * Marker Clustering, Debounced Delhi Stop Search & Real GTFS Shape Polylines.
  */
 
+const PULSE_BUILD_VERSION = '20261122-v2.1.0';
+window.PULSE_BUILD_VERSION = PULSE_BUILD_VERSION;
+
 // Application State
 const state = {
   currentView: 'journey',
@@ -62,6 +65,7 @@ async function safeFetchJson(url, options = {}) {
 
 // Initialize Application on DOM Ready
 document.addEventListener('DOMContentLoaded', () => {
+  console.log(`[PULSE] Initialized - Build: ${PULSE_BUILD_VERSION}`);
   initMap();
   initNavigation();
   initAutocomplete();
@@ -74,7 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // ==========================================
 // 1. LEAFLET MAP INITIALIZATION & BASEMAPS
 // ==========================================
-async function initMap() {
+function initMap() {
   // Center on Central Delhi (Connaught Place)
   state.map = L.map('map-element', {
     zoomControl: false
@@ -82,21 +86,13 @@ async function initMap() {
 
   L.control.zoom({ position: 'bottomright' }).addTo(state.map);
 
-  // Retrieve injected client configurations
+  // Retrieve injected client configurations synchronously from window.PULSE_CONFIG
   let cartoKey = (window.PULSE_CONFIG && window.PULSE_CONFIG.cartoApiKey) 
     ? window.PULSE_CONFIG.cartoApiKey.trim() 
-    : 'cb1_5d19_1_258c3b9d8e04bf2290f574b2';
+    : '';
   let maptilerKey = (window.PULSE_CONFIG && window.PULSE_CONFIG.maptilerApiKey) 
     ? window.PULSE_CONFIG.maptilerApiKey.trim() 
     : '';
-
-  try {
-    const mapCfg = await safeFetchJson('/api/v1/config/map');
-    if (mapCfg.carto_api_key) cartoKey = mapCfg.carto_api_key.trim();
-    if (mapCfg.maptiler_api_key) maptilerKey = mapCfg.maptiler_api_key.trim();
-  } catch (e) {
-    // Fall back to injected bootstrap keys
-  }
 
   const cartoAttr = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank">CARTO</a>';
   const osmAttr = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors';
@@ -151,11 +147,19 @@ async function initMap() {
 
   // Diagnostic Tile Error Handlers (Section 2.7)
   [positronLayer, voyagerLayer, darkLayer, satellitePlainLayer, satelliteHybridLayer, osmLayer].forEach(layer => {
-    layer.on('tileerror', function() {
+    layer.on('tileerror', function(error) {
+      console.warn('Map tile loading warning:', error);
       const statusDot = document.getElementById('layer-status-indicator');
       if (statusDot) {
         statusDot.className = 'layer-status-dot warning';
         statusDot.title = 'Tile connection warning (fallback active)';
+      }
+    });
+    layer.on('tileload', function() {
+      const statusDot = document.getElementById('layer-status-indicator');
+      if (statusDot && statusDot.className.includes('warning')) {
+        statusDot.className = 'layer-status-dot';
+        statusDot.title = `Active: ${state.currentBaseLayerKey}`;
       }
     });
   });
@@ -169,12 +173,7 @@ async function initMap() {
     'osm': osmLayer
   };
 
-  // Add default layer: Positron (Light)
-  positronLayer.addTo(state.map);
-  state.currentBaseLayer = positronLayer;
-  state.currentBaseLayerKey = 'positron';
-
-  // Wire up visible styled Map Style Selector (Section 2.5)
+  // Wire up visible styled Map Style Selector with persistence & migration (Section 2.5)
   initCustomLayerSelector(state.baseLayers);
 
   // Overlay Feature Groups
@@ -213,8 +212,46 @@ function initCustomLayerSelector(baseLayers) {
   const radios = document.querySelectorAll('input[name="pulse-map-style"]');
   const statusIndicator = document.getElementById('layer-status-indicator');
 
+  const MIGRATION_KEY = 'pulse_style_migrated_v2';
+  const STORAGE_KEY = 'pulse_map_style';
+  let savedStyle = null;
+
+  try {
+    savedStyle = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('map_style') || localStorage.getItem('pulse_basemap');
+    if (!localStorage.getItem(MIGRATION_KEY)) {
+      // Correct legacy dark preference back to default light (CARTO Positron)
+      if (savedStyle === 'dark' || savedStyle === 'dark_all' || savedStyle === 'carto-dark' || !savedStyle) {
+        savedStyle = 'positron';
+        localStorage.setItem(STORAGE_KEY, 'positron');
+      }
+      localStorage.setItem(MIGRATION_KEY, 'true');
+    }
+  } catch (e) {
+    savedStyle = 'positron';
+  }
+
+  if (!savedStyle || !baseLayers[savedStyle]) {
+    savedStyle = 'positron';
+  }
+
   function switchLayer(layerKey) {
     if (!baseLayers[layerKey]) return;
+
+    // Persist user selection
+    try {
+      localStorage.setItem(STORAGE_KEY, layerKey);
+    } catch (e) {}
+
+    // Avoid redundant swaps if already the active Leaflet layer
+    if (state.currentBaseLayerKey === layerKey && state.map.hasLayer(baseLayers[layerKey])) {
+      labels.forEach(lbl => {
+        const isMatch = (lbl.dataset.layer === layerKey);
+        lbl.classList.toggle('active', isMatch);
+        const radio = lbl.querySelector('input[type="radio"]');
+        if (radio) radio.checked = isMatch;
+      });
+      return;
+    }
 
     // Remove existing base layers
     Object.values(baseLayers).forEach(layer => {
@@ -229,7 +266,7 @@ function initCustomLayerSelector(baseLayers) {
     state.currentBaseLayer = newLayer;
     state.currentBaseLayerKey = layerKey;
 
-    // Update active UI classes
+    // Synchronize UI active classes and radio inputs
     labels.forEach(lbl => {
       const isMatch = (lbl.dataset.layer === layerKey);
       lbl.classList.toggle('active', isMatch);
@@ -255,23 +292,28 @@ function initCustomLayerSelector(baseLayers) {
       switchLayer(r.value);
     });
   });
+
+  // Initialize with migrated/persisted active layer
+  switchLayer(savedStyle);
 }
 
 // ==========================================
 // 2. RAPIDO-STYLE TOP-DOWN 2D CITY BUS SVG
 // ==========================================
 function createBusSvg(freshnessState, bearing) {
-  const glowColor = freshnessState === 'FRESH' ? '#10B981' : (freshnessState === 'AGING' ? '#F59E0B' : '#EF4444');
-  const strokeColor = freshnessState === 'FRESH' ? '#059669' : (freshnessState === 'AGING' ? '#92400E' : '#7F1D1D');
-  const highlightColor = freshnessState === 'FRESH' ? '#86EFAC' : (freshnessState === 'AGING' ? '#FDE68A' : '#FCA5A5');
+  const fState = (freshnessState || 'FRESH').toUpperCase();
+  const glowColor = fState === 'FRESH' ? '#10B981' : (fState === 'AGING' ? '#F59E0B' : '#EF4444');
+  const strokeColor = fState === 'FRESH' ? '#059669' : (fState === 'AGING' ? '#92400E' : '#7F1D1D');
+  const highlightColor = fState === 'FRESH' ? '#86EFAC' : (fState === 'AGING' ? '#FDE68A' : '#FCA5A5');
   const rotation = (typeof bearing === 'number' && !isNaN(bearing)) ? Math.round(bearing) : 0;
   const hasBearing = (typeof bearing === 'number' && !isNaN(bearing) && bearing >= 0);
 
+  const stateClass = fState.toLowerCase();
   return `
-    <div class="pulse-bus-rotate rapido-bus-icon" style="transform: rotate(${rotation}deg); transform-origin: center center;">
+    <div class="pulse-bus-rotate rapido-bus-icon status-${stateClass} freshness-${stateClass}" style="transform: rotate(${rotation}deg); transform-origin: center center;">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 120" width="32" height="60" shape-rendering="geometricPrecision">
         <defs>
-          <filter id="bus-glow-${freshnessState}" x="-30%" y="-30%" width="160%" height="160%">
+          <filter id="bus-glow-${fState}" x="-30%" y="-30%" width="160%" height="160%">
             <feDropShadow dx="0" dy="1" stdDeviation="3.0" flood-color="${glowColor}" flood-opacity="0.85"/>
             <feDropShadow dx="0" dy="0" stdDeviation="6.0" flood-color="${glowColor}" flood-opacity="0.45"/>
           </filter>
@@ -280,7 +322,7 @@ function createBusSvg(freshnessState, bearing) {
             <stop offset="100%" stop-color="#93C5FD" />
           </linearGradient>
         </defs>
-        <g filter="url(#bus-glow-${freshnessState})">
+        <g filter="url(#bus-glow-${fState})">
           <!-- 4 Side Wheels -->
           <rect x="2" y="18" width="5" height="18" rx="2" fill="#1e293b"/>
           <rect x="57" y="18" width="5" height="18" rx="2" fill="#1e293b"/>
