@@ -5,7 +5,7 @@
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com)
 [![DuckDB](https://img.shields.io/badge/DuckDB-1.1+-FFF000.svg)](https://duckdb.org)
-[![Tests Passing](https://img.shields.io/badge/pytest-35%20passed-brightgreen.svg)](tests/)
+[![Tests Passing](https://img.shields.io/badge/pytest-53%20passed-brightgreen.svg)](tests/)
 [![Architecture ADRs](https://img.shields.io/badge/ADR-001--006%20Compliant-success.svg)](DECISIONS.md)
 
 ---
@@ -19,6 +19,11 @@ Unlike traditional timetable-based journey planners that produce static estimate
 - Segment travel times are modeled across **163,018 metric segments** (300m–500m) in 15-minute time buckets across weekdays and weekends (**31,299,456 parametric distributions**).
 - Real-time GTFS-RT positions are fused with historical priors using **precision-weighted Bayesian fusion** with uncertainty floors and observation age decay.
 - Journeys are calculated using a **multi-criteria RAPTOR transit router** optimizing arrival time, transfer count, and metric walking distance.
+- **Dynamic Road-Snapped Geometry**: Slices true GTFS shape points (180–360+ points per leg) along actual road curves, completely eliminating straight-line shortcuts.
+- **Rapido-Inspired 2D SVG Bus Markers**: Top-down vector silhouettes (`viewBox="0 0 64 120"`) rotated dynamically by vehicle bearing with headlights, AC vents, taillights, and freshness halos (`FRESH` green, `AGING` amber, `STALE` red).
+- **Citywide Search & Landmark Resolution**: Indexes all 6,862 DTC bus stops with duplicate disambiguation, arbitrary coordinates (`lat, lon`), interactive map picking, and Geoapify address autocomplete with server-side key isolation.
+- **Multi-Basemap Layer Control**: Defaults to CARTO Positron (light street map) alongside CARTO Voyager, CARTO Dark Matter, MapTiler Satellite Plain, MapTiler Satellite Hybrid, and OpenStreetMap.
+- **Standardized API Error Architecture**: Strict JSON error schemas eliminate all plain-text and HTML 500 exceptions.
 - **Validation**: Achieves a **Mean Absolute Error (MAE) of 1.9 minutes** against observed DTC trips (compared to 34.9 minutes for timetable baselines), representing a **94.6% error reduction**.
 
 ---

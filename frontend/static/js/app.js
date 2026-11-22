@@ -17,8 +17,41 @@ const state = {
   pickMode: null, // 'origin' | 'dest' | null
   pollTimer: null,
   selectedOption: null,
-  _osmFallbackAdded: false
+  activeJourneyId: null,
+  searchAbortController: null,
+  _initialLiveFitted: false
 };
+
+// Safe JSON fetch wrapper with standardized error handling
+async function safeFetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+  const contentType = res.headers.get('content-type') || '';
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    if (contentType.includes('application/json')) {
+      try {
+        const errData = await res.json();
+        msg = errData?.error?.message || errData?.detail || msg;
+      } catch (e) {
+        msg = res.statusText || msg;
+      }
+    } else {
+      try {
+        const text = await res.text();
+        msg = text.slice(0, 100) || msg;
+      } catch (e) {
+        msg = res.statusText || msg;
+      }
+    }
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
+  }
+  if (!contentType.includes('application/json')) {
+    throw new Error('Unexpected non-JSON response from server');
+  }
+  return await res.json();
+}
 
 // Initialize Application on DOM Ready
 document.addEventListener('DOMContentLoaded', () => {
@@ -53,6 +86,7 @@ function initMap() {
   const cartoAttr = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank">CARTO</a>';
   const osmAttr = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors';
   const esriAttr = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
+  const maptilerAttr = '&copy; <a href="https://www.maptiler.com/copyright/" target="_blank">MapTiler</a> &copy; OpenStreetMap contributors';
 
   // Base Layers
   // 1. CARTO Positron (Default Light & Realistic Street Map)
@@ -73,13 +107,26 @@ function initMap() {
     : 'https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png';
   const darkLayer = L.tileLayer(darkUrl, { attribution: cartoAttr, subdomains: 'abcd', maxZoom: 19 });
 
-  // 4. Satellite Imagery (MapTiler if configured, else Esri World Imagery fallback)
-  const satelliteUrl = maptilerKey 
-    ? `https://api.maptiler.com/maps/satellite/{z}/{x}/{y}.jpg?key=${encodeURIComponent(maptilerKey)}`
+  // 4a. Satellite Plain (MapTiler Satellite / Esri fallback)
+  const satPlainUrl = maptilerKey 
+    ? `https://api.maptiler.com/maps/satellite-v4/{z}/{x}/{y}.jpg?key=${encodeURIComponent(maptilerKey)}`
     : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-  const satelliteLayer = L.tileLayer(satelliteUrl, { 
-    attribution: maptilerKey ? '&copy; <a href="https://www.maptiler.com/copyright/" target="_blank">MapTiler</a>' : esriAttr, 
-    maxZoom: 19 
+  const satellitePlainLayer = L.tileLayer(satPlainUrl, { 
+    attribution: maptilerKey ? maptilerAttr : esriAttr, 
+    maxZoom: 19,
+    tileSize: maptilerKey ? 512 : 256,
+    zoomOffset: maptilerKey ? -1 : 0
+  });
+
+  // 4b. Satellite Hybrid (MapTiler Hybrid with Road Overlays / Esri fallback)
+  const satHybridUrl = maptilerKey 
+    ? `https://api.maptiler.com/maps/hybrid-v4/{z}/{x}/{y}.png?key=${encodeURIComponent(maptilerKey)}`
+    : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+  const satelliteHybridLayer = L.tileLayer(satHybridUrl, { 
+    attribution: maptilerKey ? maptilerAttr : esriAttr, 
+    maxZoom: 19,
+    tileSize: maptilerKey ? 512 : 256,
+    zoomOffset: maptilerKey ? -1 : 0
   });
 
   // 5. OpenStreetMap Standard
@@ -93,7 +140,8 @@ function initMap() {
     "☀️ Street (Positron)": positronLayer,
     "🧭 Voyager (Detailed)": voyagerLayer,
     "🌙 Dark Matter": darkLayer,
-    "🛰️ Satellite Imagery": satelliteLayer,
+    "🛰️ Satellite (Plain)": satellitePlainLayer,
+    "🛰️ Satellite (Hybrid)": satelliteHybridLayer,
     "🗺️ OpenStreetMap": osmLayer
   };
   L.control.layers(baseMaps, null, { position: 'topright', collapsed: true }).addTo(state.map);
@@ -132,51 +180,64 @@ function initMap() {
 // 2. RAPIDO-STYLE TOP-DOWN 2D CITY BUS SVG
 // ==========================================
 function createBusSvg(freshnessState, bearing) {
-  const glowColor = freshnessState === 'FRESH' ? '#00e676' : (freshnessState === 'AGING' ? '#ffab00' : '#ff5252');
-  const strokeColor = freshnessState === 'FRESH' ? '#00b248' : (freshnessState === 'AGING' ? '#d97706' : '#dc2626');
+  const glowColor = freshnessState === 'FRESH' ? '#10B981' : (freshnessState === 'AGING' ? '#F59E0B' : '#EF4444');
+  const strokeColor = freshnessState === 'FRESH' ? '#059669' : (freshnessState === 'AGING' ? '#D97706' : '#DC2626');
   const rotation = (typeof bearing === 'number' && !isNaN(bearing)) ? Math.round(bearing) : 0;
   const hasBearing = (typeof bearing === 'number' && !isNaN(bearing) && bearing > 0);
 
   return `
-    <div class="rapido-bus-icon" style="transform: rotate(${rotation}deg);">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 44" width="24" height="44" shape-rendering="geometricPrecision">
+    <div class="rapido-bus-icon" style="transform: rotate(${rotation}deg); transform-origin: center center;">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 120" width="32" height="60" shape-rendering="geometricPrecision">
         <defs>
-          <filter id="bus-glow-${freshnessState}" x="-25%" y="-25%" width="150%" height="150%">
-            <feDropShadow dx="0" dy="1" stdDeviation="2.5" flood-color="${glowColor}" flood-opacity="0.85"/>
+          <filter id="bus-glow-${freshnessState}" x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="1" stdDeviation="3.0" flood-color="${glowColor}" flood-opacity="0.85"/>
           </filter>
+          <linearGradient id="windshield-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#E0F2FE" />
+            <stop offset="100%" stop-color="#93C5FD" />
+          </linearGradient>
         </defs>
         <g filter="url(#bus-glow-${freshnessState})">
+          <!-- 4 Side Wheels -->
+          <rect x="2" y="18" width="5" height="18" rx="2" fill="#1e293b"/>
+          <rect x="57" y="18" width="5" height="18" rx="2" fill="#1e293b"/>
+          <rect x="2" y="84" width="5" height="18" rx="2" fill="#1e293b"/>
+          <rect x="57" y="84" width="5" height="18" rx="2" fill="#1e293b"/>
+
           <!-- Main Bus Chassis -->
-          <rect x="3" y="4" width="18" height="36" rx="4.5" ry="4.5" fill="#ffffff" stroke="${strokeColor}" stroke-width="1.4"/>
+          <rect x="6" y="8" width="52" height="104" rx="10" ry="10" fill="#ffffff" stroke="${strokeColor}" stroke-width="2.2"/>
           
           <!-- Directional Headlight Beams (Front) -->
-          <polygon points="4,4 6,0.5 8.5,0.5 6.5,4" fill="#fef08a" opacity="${hasBearing ? '0.95' : '0.4'}"/>
-          <polygon points="20,4 17.5,0.5 15.5,0.5 17.5,4" fill="#fef08a" opacity="${hasBearing ? '0.95' : '0.4'}"/>
+          <polygon points="10,8 14,0 22,0 18,8" fill="#FEF08A" opacity="${hasBearing ? '0.95' : '0.4'}"/>
+          <polygon points="54,8 50,0 42,0 46,8" fill="#FEF08A" opacity="${hasBearing ? '0.95' : '0.4'}"/>
           
           <!-- Front Bumper Color Strip -->
-          <rect x="5.5" y="3.2" width="13" height="2.5" rx="1" fill="${glowColor}"/>
+          <rect x="14" y="6" width="36" height="5" rx="2" fill="${glowColor}"/>
+
+          <!-- Destination Display Strip -->
+          <rect x="16" y="13" width="32" height="6" rx="1.5" fill="#FACC15"/>
           
-          <!-- Curved Windshield -->
-          <path d="M 4.5 9 Q 12 6.5 19.5 9 L 19 14.5 L 5 14.5 Z" fill="#0f172a"/>
+          <!-- Curved Windshield with Gradient -->
+          <path d="M 12 24 Q 32 18 52 24 L 50 38 L 14 38 Z" fill="url(#windshield-grad)" stroke="#38bdf8" stroke-width="0.8"/>
           
-          <!-- Mirrors -->
-          <rect x="0.8" y="7.5" width="2.2" height="3.5" rx="0.8" fill="#334155"/>
-          <rect x="21" y="7.5" width="2.2" height="3.5" rx="0.8" fill="#334155"/>
+          <!-- Side Mirrors -->
+          <rect x="0" y="22" width="6" height="9" rx="2" fill="#334155"/>
+          <rect x="58" y="22" width="6" height="9" rx="2" fill="#334155"/>
           
           <!-- Side Windows (Left & Right strips) -->
-          <rect x="4.2" y="15.5" width="1.8" height="20" rx="0.6" fill="#334155"/>
-          <rect x="18" y="15.5" width="1.8" height="20" rx="0.6" fill="#334155"/>
+          <rect x="9" y="44" width="4" height="48" rx="1.5" fill="#334155"/>
+          <rect x="51" y="44" width="4" height="48" rx="1.5" fill="#334155"/>
           
-          <!-- Roof Top AC Climate Unit -->
-          <rect x="7.5" y="18" width="9" height="11" rx="2" fill="#f8fafc" stroke="#94a3b8" stroke-width="0.8"/>
-          <line x1="9" y1="20.5" x2="15" y2="20.5" stroke="#64748b" stroke-width="0.8" stroke-linecap="round"/>
-          <line x1="9" y1="23.5" x2="15" y2="23.5" stroke="#64748b" stroke-width="0.8" stroke-linecap="round"/>
-          <line x1="9" y1="26.5" x2="15" y2="26.5" stroke="#64748b" stroke-width="0.8" stroke-linecap="round"/>
+          <!-- Roof Top AC Climate Unit with Louvers -->
+          <rect x="18" y="48" width="28" height="28" rx="4" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
+          <line x1="22" y1="55" x2="42" y2="55" stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>
+          <line x1="22" y1="62" x2="42" y2="62" stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>
+          <line x1="22" y1="69" x2="42" y2="69" stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>
           
-          <!-- Rear Windshield & Taillights -->
-          <rect x="5.5" y="37.5" width="13" height="1.8" rx="0.5" fill="#0f172a"/>
-          <rect x="3.5" y="37.8" width="2" height="1.6" rx="0.5" fill="#ef4444"/>
-          <rect x="18.5" y="37.8" width="2" height="1.6" rx="0.5" fill="#ef4444"/>
+          <!-- Rear Window & Taillights -->
+          <rect x="14" y="98" width="36" height="4" rx="1.5" fill="#0f172a"/>
+          <rect x="8" y="104" width="6" height="4" rx="1.5" fill="#EF4444"/>
+          <rect x="50" y="104" width="6" height="4" rx="1.5" fill="#EF4444"/>
         </g>
       </svg>
     </div>
@@ -184,7 +245,7 @@ function createBusSvg(freshnessState, bearing) {
 }
 
 function getBusPopupHtml(b) {
-  const freshnessColor = b.freshness === 'FRESH' ? '#00e676' : (b.freshness === 'AGING' ? '#ffab00' : '#ff5252');
+  const freshnessColor = b.freshness === 'FRESH' ? '#10B981' : (b.freshness === 'AGING' ? '#F59E0B' : '#EF4444');
   return `
     <div style="font-size: 12px; font-family: var(--font-sans); min-width: 180px; color: #1e293b;">
       <div style="font-weight: 800; font-size: 13px; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 6px;">
@@ -207,14 +268,12 @@ async function loadLiveBuses() {
   if (countEl) countEl.innerText = 'Polling Live Feed...';
 
   try {
-    let res = await fetch('/api/v1/vehicles?limit=3000');
-    let buses = await res.json();
+    let buses = await safeFetchJson('/api/v1/vehicles?limit=3000');
 
     // If no buses in cache yet, trigger on-demand refresh
     if (!buses || buses.length === 0) {
       await fetch('/api/v1/vehicles/refresh', { method: 'POST' });
-      res = await fetch('/api/v1/vehicles?limit=3000');
-      buses = await res.json();
+      buses = await safeFetchJson('/api/v1/vehicles?limit=3000');
     }
 
     if (countEl) countEl.innerText = `${buses.length.toLocaleString()} Active Vehicles`;
@@ -235,9 +294,9 @@ async function loadLiveBuses() {
         marker.setIcon(L.divIcon({
           html: iconHtml,
           className: 'rapido-bus-marker',
-          iconSize: [24, 44],
-          iconAnchor: [12, 22],
-          popupAnchor: [0, -18]
+          iconSize: [32, 60],
+          iconAnchor: [16, 30],
+          popupAnchor: [0, -28]
         }));
         marker.setPopupContent(getBusPopupHtml(b));
       } else {
@@ -246,9 +305,9 @@ async function loadLiveBuses() {
         const icon = L.divIcon({
           html: iconHtml,
           className: 'rapido-bus-marker',
-          iconSize: [24, 44],
-          iconAnchor: [12, 22],
-          popupAnchor: [0, -18]
+          iconSize: [32, 60],
+          iconAnchor: [16, 30],
+          popupAnchor: [0, -28]
         });
 
         const marker = L.marker([b.lat, b.lon], { icon: icon });
@@ -273,7 +332,7 @@ async function loadLiveBuses() {
       state.map.fitBounds(state.clusterGroup.getBounds(), { padding: [30, 30] });
     }
   } catch (err) {
-    console.warn("Live feed poll error:", err);
+    console.warn("Live feed poll notice:", err.message);
     if (countEl) countEl.innerText = 'Feed Offline';
   }
 }
@@ -412,11 +471,10 @@ function setupAutocomplete(inputId, dropdownId, onSelect) {
 
     debounceTimer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/v1/places/autocomplete?q=${encodeURIComponent(val)}&limit=8`);
-        const data = await res.json();
+        const data = await safeFetchJson(`/api/v1/places/autocomplete?q=${encodeURIComponent(val)}&limit=8`);
         renderSuggestions(dropdown, data.suggestions || [], onSelect);
       } catch (err) {
-        console.warn("Autocomplete error:", err);
+        console.warn("Autocomplete notice:", err.message);
       }
     }, 220);
   });
@@ -570,14 +628,23 @@ function initJourneyForm() {
 
     if (!from || !to) return;
 
+    // Abort previous pending query if active
+    if (state.searchAbortController) {
+      state.searchAbortController.abort();
+    }
+    state.searchAbortController = new AbortController();
+
+    // Atomically clear route layer before new query begins
+    state.routeLayer.clearLayers();
     showLoadingState(true);
+
     try {
       const url = `/api/v1/journeys?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&depart_at=${encodeURIComponent(timeVal)}`;
-      const res = await fetch(url);
-      const data = await res.json();
+      const data = await safeFetchJson(url, { signal: state.searchAbortController.signal });
       renderJourneyResults(data);
     } catch (err) {
-      alert("Error calculating journeys: " + err.message);
+      if (err.name === 'AbortError') return;
+      renderJourneyError(err.message);
     } finally {
       showLoadingState(false);
     }
@@ -598,6 +665,18 @@ function showLoadingState(isLoading) {
     btn.innerHTML = '<span>⚡</span> Plan Optimal Journey';
     btn.disabled = false;
   }
+}
+
+function renderJourneyError(errorMsg) {
+  const container = document.getElementById('journey-results-list');
+  container.innerHTML = `
+    <div class="empty-state" style="padding: 24px; text-align: center; border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 12px; background: rgba(239, 68, 68, 0.05); margin-top: 12px;">
+      <div style="font-size: 24px; margin-bottom: 8px;">⚠️</div>
+      <div style="font-weight: 700; color: #ef4444; font-size: 14px;">Journey Notice</div>
+      <p style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">${errorMsg}</p>
+      <p style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">Try selecting from autocomplete suggestions or click the map to set exact coordinates.</p>
+    </div>
+  `;
 }
 
 function renderJourneyResults(data) {
@@ -699,6 +778,7 @@ function renderJourneyResults(data) {
     card.addEventListener('click', () => {
       document.querySelectorAll('.journey-card').forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
+      state.activeJourneyId = opt.journey_id || opt.option_id;
       highlightJourneyOnMap(opt);
     });
 
@@ -706,6 +786,7 @@ function renderJourneyResults(data) {
   });
 
   // Highlight first option by default
+  state.activeJourneyId = data.options[0]?.journey_id || 1;
   highlightJourneyOnMap(data.options[0]);
 }
 
@@ -713,7 +794,7 @@ function highlightJourneyOnMap(option) {
   state.routeLayer.clearLayers();
   const allBounds = [];
 
-  const routeColors = ['#0284c7', '#7c3aed', '#059669']; // Vibrant contrast colors for bus legs
+  const routeColors = ['#0284c7', '#7c3aed', '#059669']; // High-contrast corridor colors
   let busLegIndex = 0;
 
   option.legs.forEach(leg => {
@@ -799,95 +880,167 @@ function highlightJourneyOnMap(option) {
 // 8. TRAFFIC TIME MACHINE
 // ==========================================
 function initTimeMachine() {
-  const slider = document.getElementById('time-machine-slider');
-  const clockDisplay = document.getElementById('tm-clock-display');
-  const durationDisplay = document.getElementById('tm-duration-display');
-  const speedDisplay = document.getElementById('tm-speed-display');
+  const routeSelect = document.getElementById('tm-route-select');
+  const dowSelect = document.getElementById('tm-dow-select');
+  const slider = document.getElementById('tm-hour-slider');
+  const hourDisplay = document.getElementById('tm-hour-display');
 
-  if (!slider) return;
+  if (!routeSelect || !slider) return;
 
-  slider.addEventListener('input', async () => {
-    const hour = parseInt(slider.value);
-    const timeStr = `${hour.toString().padStart(2, '0')}:00`;
-    clockDisplay.innerText = timeStr;
+  // Load available major routes
+  safeFetchJson('/api/v1/routes?limit=50')
+    .then(routes => {
+      routeSelect.innerHTML = '';
+      routes.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r.route_id;
+        opt.innerText = `${r.route_short_name} (${r.route_long_name || 'DTC Route'})`;
+        routeSelect.appendChild(opt);
+      });
+      // Initial trigger
+      updateTimeComparison();
+    })
+    .catch(err => console.warn("Failed to load routes for Time Machine:", err.message));
 
-    // Fetch comparison for corridor
-    try {
-      const res = await fetch(`/api/v1/analytics/time-comparison?route_id=1728&shape_id=shp_3_2436&from_dist=0&to_dist=15000`);
-      const comps = await res.json();
-      const match = comps.find(c => c.hour === hour) || comps[0];
-      
-      durationDisplay.innerText = `${match.duration_minutes} min`;
-      speedDisplay.innerText = `${match.speed_kmh} km/h`;
-      
-      const badge = document.getElementById('tm-traffic-badge');
-      if (match.speed_kmh <= 14) {
-        badge.innerText = 'HEAVY CONGESTION (PEAK)';
-        badge.style.color = '#ff1744';
-      } else if (match.speed_kmh <= 22) {
-        badge.innerText = 'MODERATE TRAFFIC';
-        badge.style.color = '#ffd600';
-      } else {
-        badge.innerText = 'FREE-FLOW TRAFFIC';
-        badge.style.color = '#00e676';
-      }
-    } catch (e) {
-      console.warn("Time machine fetch error:", e);
-    }
+  routeSelect.addEventListener('change', updateTimeComparison);
+  if (dowSelect) dowSelect.addEventListener('change', updateTimeComparison);
+
+  slider.addEventListener('input', () => {
+    const hr = parseInt(slider.value, 10);
+    const ampm = hr >= 12 ? 'PM' : 'AM';
+    const displayHr = hr % 12 === 0 ? 12 : hr % 12;
+    if (hourDisplay) hourDisplay.innerText = `${String(displayHr).padStart(2, '0')}:00 ${ampm}`;
+    updateTimeComparison();
   });
+}
 
-  // Trigger initial value
-  slider.dispatchEvent(new Event('input'));
+async function updateTimeComparison() {
+  const routeSelect = document.getElementById('tm-route-select');
+  const dowSelect = document.getElementById('tm-dow-select');
+  const slider = document.getElementById('tm-hour-slider');
+
+  if (!routeSelect || !slider) return;
+
+  const routeId = routeSelect.value;
+  const isWeekend = dowSelect ? dowSelect.value : '0';
+  const hour = slider.value;
+
+  if (!routeId) return;
+
+  try {
+    const url = `/api/v1/analytics/time-comparison?route_id=${encodeURIComponent(routeId)}&hour=${hour}&is_weekend=${isWeekend}`;
+    const data = await safeFetchJson(url);
+
+    // Update KPI Tiles
+    const curEl = document.getElementById('tm-current-time');
+    const freeEl = document.getElementById('tm-freeflow-time');
+    const delayEl = document.getElementById('tm-delay-time');
+    const speedEl = document.getElementById('tm-avg-speed');
+
+    if (curEl) curEl.innerText = `${data.selected_hour_duration_minutes}m`;
+    if (freeEl) freeEl.innerText = `${data.freeflow_duration_minutes}m`;
+    if (delayEl) delayEl.innerText = `+${data.delay_minutes}m`;
+    if (speedEl) speedEl.innerText = `${data.avg_speed_kmh} km/h`;
+
+    updateTimeMachineChart(data.hourly_profile, parseInt(hour, 10));
+  } catch (err) {
+    console.warn("Time comparison query notice:", err.message);
+  }
+}
+
+function updateTimeMachineChart(profile, activeHour) {
+  const chartContainer = document.getElementById('tm-chart-bars');
+  if (!chartContainer || !profile) return;
+
+  chartContainer.innerHTML = '';
+  const maxVal = Math.max(...profile.map(p => p.travel_time_minutes));
+
+  profile.forEach(p => {
+    const barWrap = document.createElement('div');
+    barWrap.className = `chart-bar-col ${p.hour === activeHour ? 'active' : ''}`;
+
+    const heightPct = Math.max(12, Math.round((p.travel_time_minutes / maxVal) * 100));
+    const isPeak = (p.hour >= 8 && p.hour <= 11) || (p.hour >= 17 && p.hour <= 20);
+
+    barWrap.innerHTML = `
+      <div class="chart-bar ${isPeak ? 'peak' : ''}" style="height: ${heightPct}%;">
+        <span class="bar-tooltip">${p.travel_time_minutes}m (${p.speed_kmh} km/h)</span>
+      </div>
+      <span class="bar-label">${p.hour}h</span>
+    `;
+
+    barWrap.addEventListener('click', () => {
+      const slider = document.getElementById('tm-hour-slider');
+      if (slider) {
+        slider.value = p.hour;
+        slider.dispatchEvent(new Event('input'));
+      }
+    });
+
+    chartContainer.appendChild(barWrap);
+  });
 }
 
 // ==========================================
-// 9. VALIDATION LABORATORY
+// 9. VALIDATION LAB BENCHMARKS
 // ==========================================
 async function loadValidationLab() {
   try {
-    const res = await fetch('/api/v1/validation/summary');
-    const data = await res.json();
+    const data = await safeFetchJson('/api/v1/validation/summary');
     
-    document.getElementById('val-mae-pulse').innerText = `${data.metrics.mae_pulse_minutes}m`;
-    document.getElementById('val-mae-tt').innerText = `${data.metrics.mae_timetable_minutes}m`;
-    document.getElementById('val-err-reduction').innerText = `-${data.metrics.error_reduction_pct}% Error`;
-    document.getElementById('val-accuracy').innerText = `${data.metrics.mean_accuracy_pct}%`;
+    const maeModel = document.getElementById('val-model-mae');
+    const maeStatic = document.getElementById('val-static-mae');
+    const errorRed = document.getElementById('val-error-reduction');
+    const accuracy = document.getElementById('val-accuracy');
 
-    const tbody = document.getElementById('val-benchmarks-body');
-    tbody.innerHTML = '';
-    
-    data.benchmarks.forEach(b => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td><strong>${b.corridor}</strong><br/><span style="color: var(--text-muted); font-size: 11px;">${b.departure_time}</span></td>
-        <td>${b.distance_km} km</td>
-        <td style="color: var(--accent-rose);">${b.static_timetable_minutes} min</td>
-        <td style="font-weight: 700;">${b.observed_bus_trip_minutes} min</td>
-        <td style="color: var(--accent-cyan); font-weight: 700;">${b.pulse_predicted_minutes} min</td>
-        <td>${b.google_maps_bus_minutes} min</td>
-        <td><span class="badge badge-high">${b.pulse_accuracy_pct}%</span></td>
-      `;
-      tbody.appendChild(tr);
-    });
+    if (maeModel) maeModel.innerText = `${data.pulse_model_mae_minutes}m`;
+    if (maeStatic) maeStatic.innerText = `${data.static_schedule_mae_minutes}m`;
+    if (errorRed) errorRed.innerText = `-${data.error_reduction_pct}%`;
+    if (accuracy) accuracy.innerText = `${data.model_accuracy_pct}%`;
+
+    // Render benchmark rows
+    const tbody = document.getElementById('val-benchmarks-tbody');
+    if (tbody && data.benchmarks) {
+      tbody.innerHTML = '';
+      data.benchmarks.forEach(b => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><strong>${b.corridor}</strong><br/><span style="font-size: 11px; color: var(--text-muted);">${b.condition}</span></td>
+          <td>${b.distance_km} km</td>
+          <td style="color: #ef4444; font-weight: 700;">${b.static_timetable_minutes}m</td>
+          <td style="color: var(--text-main); font-weight: 700;">${b.observed_bus_minutes}m</td>
+          <td style="color: var(--accent-cyan); font-weight: 800;">${b.pulse_predicted_minutes}m</td>
+          <td style="color: var(--text-muted);">${b.google_maps_minutes}m</td>
+          <td><span class="badge badge-high">${b.accuracy_pct}%</span></td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
   } catch (err) {
-    console.error("Failed to load validation lab:", err);
+    console.warn("Failed to load validation lab data:", err.message);
   }
 }
 
 // ==========================================
-// 10. COMMAND CENTER STATUS
+// 10. SYSTEM COMMAND CENTER
 // ==========================================
 async function loadCommandStatus() {
   try {
-    const res = await fetch('/api/v1/system/status');
-    const data = await res.json();
+    const data = await safeFetchJson('/api/v1/system/status');
 
-    document.getElementById('cmd-drive-free').innerText = `${data.storage.free_gb} GB`;
-    document.getElementById('cmd-db-count').innerText = `${data.datasets.historical_sqlite.database_count} / 31 DBs`;
-    document.getElementById('cmd-gtfs-stops').innerText = '6,862 Stops';
-    document.getElementById('cmd-gtfs-routes').innerText = '2,574 Routes';
-    document.getElementById('cmd-live-status').innerText = data.live_feed.status;
+    const diskEl = document.getElementById('cmd-disk-storage');
+    const histEl = document.getElementById('cmd-hist-dbs');
+    const gtfsEl = document.getElementById('cmd-gtfs-stops');
+    const feedEl = document.getElementById('cmd-feed-status');
+
+    if (diskEl) diskEl.innerText = `${data.storage.free_gb} GB Free (E:)`;
+    if (histEl) histEl.innerText = `${data.datasets.historical_sqlite.database_count} / 31 DBs`;
+    if (gtfsEl) gtfsEl.innerText = `6,862 Stops`;
+    if (feedEl) {
+      feedEl.innerText = data.live_feed.status;
+      feedEl.style.color = data.live_feed.status === 'ACTIVE' ? '#10B981' : '#F59E0B';
+    }
   } catch (err) {
-    console.warn("Status fetch error:", err);
+    console.warn("Failed to load command status:", err.message);
   }
 }

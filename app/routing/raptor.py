@@ -283,31 +283,40 @@ class RaptorRouter:
         placeholders_o = ", ".join([f"'{x}'" for x in o_ids])
         placeholders_d = ", ".join([f"'{x}'" for x in d_ids])
 
-        # High-traffic interchange hubs in Delhi (ISBTs, Central Nodes, Ring Road)
+        # High-performance CTE-based 1-transfer search (prevents OOM on massive interchange hubs)
         query = f"""
+            WITH orig_trips AS (
+                SELECT DISTINCT ON (t.route_id)
+                    t.route_id, t.trip_id, t.shape_id, r.route_short_name,
+                    st.stop_id AS orig_id, st.stop_sequence AS orig_seq, st.stop_dist AS orig_dist
+                FROM stop_times st
+                JOIN trips t ON st.trip_id = t.trip_id
+                JOIN routes r ON t.route_id = r.route_id
+                WHERE st.stop_id IN ({placeholders_o})
+                LIMIT 30
+            ),
+            dest_trips AS (
+                SELECT DISTINCT ON (t.route_id)
+                    t.route_id, t.trip_id, t.shape_id, r.route_short_name,
+                    st.stop_id AS dest_id, st.stop_sequence AS dest_seq, st.stop_dist AS dest_dist
+                FROM stop_times st
+                JOIN trips t ON st.trip_id = t.trip_id
+                JOIN routes r ON t.route_id = r.route_id
+                WHERE st.stop_id IN ({placeholders_d})
+                LIMIT 30
+            )
             SELECT 
-                r1.route_id AS r1_id, r1.route_short_name AS r1_name, t1.shape_id AS shape1,
-                st1_o.stop_id AS orig_id, st1_o.stop_sequence AS orig_seq, st1_o.stop_dist AS orig_dist,
-                st1_x.stop_id AS xfer_id, st1_x.stop_sequence AS xfer1_seq, st1_x.stop_dist AS xfer1_dist,
-                
-                r2.route_id AS r2_id, r2.route_short_name AS r2_name, t2.shape_id AS shape2,
-                st2_x.stop_sequence AS xfer2_seq, st2_x.stop_dist AS xfer2_dist,
-                st2_d.stop_id AS dest_id, st2_d.stop_sequence AS dest_seq, st2_d.stop_dist AS dest_dist
-            FROM stop_times st1_o
-            JOIN stop_times st1_x ON st1_o.trip_id = st1_x.trip_id
-            JOIN trips t1 ON st1_o.trip_id = t1.trip_id
-            JOIN routes r1 ON t1.route_id = r1.route_id
-            
-            JOIN stop_times st2_x ON st1_x.stop_id = st2_x.stop_id
-            JOIN stop_times st2_d ON st2_x.trip_id = st2_d.trip_id
-            JOIN trips t2 ON st2_x.trip_id = t2.trip_id
-            JOIN routes r2 ON t2.route_id = r2.route_id
-            
-            WHERE st1_o.stop_id IN ({placeholders_o})
-              AND st2_d.stop_id IN ({placeholders_d})
-              AND st1_o.stop_sequence < st1_x.stop_sequence
-              AND st2_x.stop_sequence < st2_d.stop_sequence
-              AND r1.route_id != r2.route_id
+                ot.route_id AS r1_id, ot.route_short_name AS r1_name, ot.shape_id AS shape1,
+                ot.orig_id, ot.orig_seq, ot.orig_dist,
+                st1.stop_id AS xfer_id, st1.stop_sequence AS xfer1_seq, st1.stop_dist AS xfer1_dist,
+                dt.route_id AS r2_id, dt.route_short_name AS r2_name, dt.shape_id AS shape2,
+                st2.stop_sequence AS xfer2_seq, st2.stop_dist AS xfer2_dist,
+                dt.dest_id, dt.dest_seq, dt.dest_dist
+            FROM orig_trips ot
+            JOIN stop_times st1 ON ot.trip_id = st1.trip_id AND st1.stop_sequence > ot.orig_seq
+            JOIN stop_times st2 ON st1.stop_id = st2.stop_id
+            JOIN dest_trips dt ON st2.trip_id = dt.trip_id AND st2.stop_sequence < dt.dest_seq
+            WHERE ot.route_id != dt.route_id
             LIMIT 20;
         """
         matches = self.con.execute(query).fetchdf()

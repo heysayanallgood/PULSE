@@ -125,3 +125,36 @@
 - [x] Add comprehensive integration tests in `tests/integration/test_advanced_map_search.py`
 - [x] Verify all 42 tests passing (`pytest tests/ -v`)
 - [x] Author comprehensive documentation in `docs/ADVANCED_MAP_AND_CITYWIDE_SEARCH.md`
+
+### Phase 12: Ultimate Multi-Phase Engineering & Repair Directive
+- [x] Standardized API error contract eliminating plain-text / HTML 500 errors (`docs/JOURNEY_API_JSON_REPAIR.md`)
+- [x] Global exception interceptors in `app/main.py` (`StarletteHTTPException`, `RequestValidationError`, `Exception`)
+- [x] Client-side `safeFetchJson` error handling, AbortController, and atomic route layer clearing
+- [x] Unique timestamped request identifier (`request_id`) and unique journey option identifiers (`journey_id`)
+- [x] Systematic verification of dynamic route geometry across 6 core corridors:
+  - [x] Scenario 1: Anand Vihar ISBT → Nehru Place (verified road geometry)
+  - [x] Scenario 2: Anand Vihar ISBT → Badarpur Border (verified alighting at border)
+  - [x] Separation Invariant: > 4,000m physical divergence between Nehru Place and Badarpur alighting stops with zero shared geometry points
+  - [x] Scenario 3: Kashmere Gate → Nehru Place
+  - [x] Scenario 4: India Gate → Nehru Place (curated landmark centroid resolution to Baroda House access stop with walking leg)
+  - [x] Scenario 5: Connaught Place → AIIMS (high-performance CTE join on interchange hub stops)
+  - [x] Scenario 6: Anand Vihar ISBT → Dhaula Kuan
+- [x] DuckDB CTE-based 1-transfer routing optimization preventing memory exhaustion and reducing latency to < 0.05s
+- [x] Full landmark catalog in `app/services/places_service.py` (35+ major Delhi destinations)
+- [x] Vector Rapido-style 2D bus SVG icon specifications (`viewBox="0 0 64 120"`, 32x60px, 4 wheels, headlights, destination display, windshield gradient, AC louvers, red taillights, dynamic CSS bearing rotation)
+- [x] MapTiler Satellite Plain, Satellite Hybrid with road overlays, and Esri World Imagery fallback
+- [x] Complete automated test suite expanded to 53 tests:
+  - [x] `tests/unit/test_bus_svg_markers.py` (3 tests)
+  - [x] `tests/routing/test_dynamic_route_geometry.py` (8 tests)
+  - [x] `tests/integration/test_advanced_map_search.py` (7 tests)
+  - [x] 100% test pass rate: **53 passed out of 53 tests**
+- [x] Complete documentation deliverables:
+  - [x] `docs/JOURNEY_API_JSON_REPAIR.md`
+  - [x] `docs/DYNAMIC_ROUTE_GEOMETRY.md`
+  - [x] `docs/GPS_AND_GTFS_SHAPE_MATCHING.md`
+  - [x] `docs/DELHI_CITYWIDE_SEARCH.md`
+  - [x] `docs/BUS_SVG_MARKER_IMPLEMENTATION.md`
+  - [x] `docs/MAPTILER_SATELLITE_INTEGRATION.md`
+  - [x] `docs/LIVE_VEHICLE_RENDERING.md`
+  - [x] `docs/END_TO_END_TEST_REPORT.md`
+  - [x] `docs/KNOWN_LIMITATIONS.md`

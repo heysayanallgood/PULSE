@@ -6,6 +6,7 @@ spatiotemporal travel-time model prediction, and comparative congestion analytic
 from typing import List, Dict, Any, Optional, Tuple, Union
 from datetime import datetime
 import re
+import time
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -13,6 +14,7 @@ from app.data.gtfs.repository import gtfs_repo
 from app.routing.walking import calculate_walking_leg
 from app.routing.raptor import raptor_router, RaptorJourneyOption
 from app.services.prediction_service import prediction_service
+from app.services.places_service import places_service
 
 
 class JourneyPlanningService:
@@ -23,7 +25,7 @@ class JourneyPlanningService:
         location_input: str
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """
-        Resolves a location string (either "lat,lon", "Stop Name [ID]", stop name, or place)
+        Resolves a location string (either "lat,lon", "Stop Name [ID]", landmark, or stop name)
         into a resolved name and a list of candidate boarding/alighting stops.
         """
         loc_str = location_input.strip()
@@ -39,10 +41,10 @@ class JourneyPlanningService:
                 logger.warning(f"Coordinate ({lat}, {lon}) is outside Delhi transit bounds.")
                 return f"Out-of-Bounds ({lat:.4f}, {lon:.4f})", []
 
-            nearby = gtfs_repo.find_nearby_stops(lat, lon, radius_m=settings.MAX_WALK_RADIUS_M, limit=5)
+            nearby = gtfs_repo.find_nearby_stops(lat, lon, radius_m=settings.MAX_WALK_RADIUS_M, limit=10)
             if not nearby:
                 # Expand to 1500m (walk limit)
-                nearby = gtfs_repo.find_nearby_stops(lat, lon, radius_m=1500.0, limit=5)
+                nearby = gtfs_repo.find_nearby_stops(lat, lon, radius_m=1500.0, limit=10)
             
             for s in nearby:
                 w = calculate_walking_leg(lat, lon, float(s["stop_lat"]), float(s["stop_lon"]))
@@ -67,8 +69,22 @@ class JourneyPlanningService:
                 stop["walk_leg"] = {"distance_m": 0.0, "duration_s": 0, "walk_type": "SAME_PLATFORM"}
                 return stop["stop_name"], [stop]
 
-        # 4. Stop name text search in GTFS index
-        stops = gtfs_repo.search_stops(loc_str, limit=5)
+        # 4. Check Delhi Landmarks Catalog (e.g. "Connaught Place", "India Gate")
+        # Landmarks are resolved to spatial centroids to capture all access stops within 800m
+        landmark = places_service.resolve_landmark(loc_str)
+        if landmark:
+            lm_title, lm_lat, lm_lon, lm_desc = landmark
+            nearby = gtfs_repo.find_nearby_stops(lm_lat, lm_lon, radius_m=800.0, limit=10)
+            if not nearby:
+                nearby = gtfs_repo.find_nearby_stops(lm_lat, lm_lon, radius_m=1500.0, limit=10)
+            if nearby:
+                for s in nearby:
+                    w = calculate_walking_leg(lm_lat, lm_lon, float(s["stop_lat"]), float(s["stop_lon"]))
+                    s["walk_leg"] = w
+                return lm_title, nearby
+
+        # 5. Stop name text search in GTFS index
+        stops = gtfs_repo.search_stops(loc_str, limit=8)
         if stops:
             primary_stop = stops[0]
             for s in stops:
@@ -86,13 +102,24 @@ class JourneyPlanningService:
     ) -> Dict[str, Any]:
         """
         Computes Pareto-optimal bus journeys between origin and destination.
+        Returns standardized contract with request_id, query, and unique journey IDs.
         """
+        request_id = f"req_{int(time.time() * 1000)}"
+        query_meta = {
+            "origin": origin,
+            "destination": destination,
+            "departure_time": departure_time_str,
+            "date": date_str
+        }
+
         orig_name, orig_candidates = self._resolve_location_candidates(origin)
         dest_name, dest_candidates = self._resolve_location_candidates(destination)
 
         if not orig_candidates:
             return {
                 "status": "NO_STOPS_FOUND",
+                "request_id": request_id,
+                "query": query_meta,
                 "error": f"No transit stops found matching origin '{origin}'",
                 "origin": origin,
                 "destination": destination,
@@ -102,6 +129,8 @@ class JourneyPlanningService:
         if not dest_candidates:
             return {
                 "status": "NO_STOPS_FOUND",
+                "request_id": request_id,
+                "query": query_meta,
                 "error": f"No transit stops found matching destination '{destination}'",
                 "origin": origin,
                 "destination": destination,
@@ -128,13 +157,17 @@ class JourneyPlanningService:
         # 1. Round 1: Direct journeys
         direct_opts = raptor_router.find_direct_journeys(orig_candidates, dest_candidates, dep_s, is_weekend)
 
-        # 2. Round 2: 1-transfer journeys
-        xfer_opts = raptor_router.find_one_transfer_journeys(orig_candidates, dest_candidates, dep_s, is_weekend)
+        # 2. Round 2: 1-transfer journeys (if direct options are fewer than 3)
+        xfer_opts = []
+        if len(direct_opts) < 3:
+            xfer_opts = raptor_router.find_one_transfer_journeys(orig_candidates, dest_candidates, dep_s, is_weekend)
 
         all_candidates = direct_opts + xfer_opts
         if not all_candidates:
             return {
                 "status": "NO_ROUTES_FOUND",
+                "request_id": request_id,
+                "query": query_meta,
                 "message": f"No continuous bus connection found between {orig_name} and {dest_name}",
                 "origin": orig_name,
                 "destination": dest_name,
@@ -148,15 +181,27 @@ class JourneyPlanningService:
         for idx, opt in enumerate(pareto_opts):
             d = opt.to_dict()
             d["option_id"] = idx + 1
+            d["journey_id"] = f"j_{request_id}_{idx + 1}"
             d["origin"] = orig_name
             d["destination"] = dest_name
+            
+            # Ensure boarding and alighting coordinates on bus legs
+            for leg in d.get("legs", []):
+                if leg["type"] == "BUS":
+                    if "boarding_lat" not in leg and leg.get("geometry"):
+                        leg["boarding_lat"] = leg["geometry"][0][0]
+                        leg["boarding_lon"] = leg["geometry"][0][1]
+                    if "alighting_lat" not in leg and leg.get("geometry"):
+                        leg["alighting_lat"] = leg["geometry"][-1][0]
+                        leg["alighting_lon"] = leg["geometry"][-1][1]
+
             formatted_options.append(d)
 
         # Comparative Off-Peak Benchmark (Satisfies 2.2 in Hackathon Brief)
         # Evaluate how long the same trip takes at off-peak (11:00 PM)
         off_peak_dep_s = 23 * 3600
         off_peak_opts = raptor_router.find_direct_journeys(orig_candidates, dest_candidates, off_peak_dep_s, is_weekend)
-        if not off_peak_opts:
+        if not off_peak_opts and len(direct_opts) < 3:
             off_peak_opts = raptor_router.find_one_transfer_journeys(orig_candidates, dest_candidates, off_peak_dep_s, is_weekend)
 
         off_peak_comparison = None
@@ -174,6 +219,8 @@ class JourneyPlanningService:
 
         return {
             "status": "SUCCESS",
+            "request_id": request_id,
+            "query": query_meta,
             "origin": orig_name,
             "destination": dest_name,
             "departure_time": departure_time_str or datetime.now().strftime("%H:%M:%S"),

@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any
 
-from fastapi import FastAPI, status
+from fastapi import FastAPI, status, Request
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -73,6 +75,58 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Standardized Error Handlers (Eliminates unexpected HTML / text errors)
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    req_id = f"err_{int(time.time() * 1000)}"
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": "HTTP_ERROR",
+                "message": exc.detail if isinstance(exc.detail, str) else str(exc.detail),
+                "status_code": exc.status_code,
+                "request_id": req_id
+            }
+        }
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    req_id = f"err_{int(time.time() * 1000)}"
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "Invalid request parameters",
+                "status_code": 422,
+                "request_id": req_id,
+                "details": exc.errors()
+            }
+        }
+    )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    req_id = f"err_{int(time.time() * 1000)}"
+    logger.exception(f"Unhandled exception on {request.url.path} [{req_id}]: {exc}")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": {
+                "code": "INTERNAL_SERVER_ERROR",
+                "message": "An unexpected error occurred while processing the request.",
+                "status_code": 500,
+                "request_id": req_id,
+                "details": str(exc)
+            }
+        }
+    )
 
 
 # Mount API v1 Routers
