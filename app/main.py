@@ -179,6 +179,18 @@ def get_public_config() -> Dict[str, Any]:
     }
 
 
+@app.get("/api/v1/config/map", tags=["System"])
+def get_map_config() -> Dict[str, Any]:
+    """Returns safe browser map tile configurations (CARTO & MapTiler public client keys)."""
+    return {
+        "carto_configured": bool(settings.CARTO_API_KEY),
+        "maptiler_configured": bool(settings.MAPTILER_API_KEY),
+        "carto_api_key": settings.CARTO_API_KEY or "",
+        "maptiler_api_key": settings.MAPTILER_API_KEY or "",
+        "default_style": "carto-positron"
+    }
+
+
 @app.get("/api", tags=["Root"])
 def root() -> Dict[str, Any]:
     """Root endpoint returning service identity and navigation links."""

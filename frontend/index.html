@@ -65,12 +65,58 @@
     <!-- Map Selection Banner (active when user picks a location on the map) -->
     <div id="map-selection-banner" class="map-selection-banner" style="display: none;">
       <span id="map-selection-text">📍 Click anywhere on the map to set Origin...</span>
-      <button type="button" id="btn-cancel-pick" class="btn-text-sm" style="color: #ff5252; margin-left: 8px;">✕ Cancel</button>
+      <button type="button" id="btn-cancel-pick" class="btn-text-sm" style="color: #ff5252; margin-left: 8px; font-weight: 700;">✕ Cancel</button>
     </div>
 
     <!-- SHARED LEAFLET MAP ELEMENT (VISIBLE ON JOURNEY & LIVE VIEWS) -->
     <div id="shared-map-container">
       <div id="map-element"></div>
+
+      <!-- VISIBLE LAYER CONTROL (SECTION 2.5) -->
+      <div id="pulse-layer-selector" class="pulse-layer-control">
+        <div class="layer-control-header">
+          <span class="layer-control-title">MAP STYLE</span>
+          <span id="layer-status-indicator" class="layer-status-dot" title="Tile provider active"></span>
+        </div>
+        <div class="layer-control-options">
+          <label class="layer-radio-item active" data-layer="positron">
+            <input type="radio" name="pulse-map-style" value="positron" checked>
+            <span class="radio-indicator"></span>
+            <span class="layer-name">Street Light</span>
+            <span class="layer-badge">CARTO</span>
+          </label>
+          <label class="layer-radio-item" data-layer="voyager">
+            <input type="radio" name="pulse-map-style" value="voyager">
+            <span class="radio-indicator"></span>
+            <span class="layer-name">Detailed Street</span>
+            <span class="layer-badge">CARTO</span>
+          </label>
+          <label class="layer-radio-item" data-layer="dark">
+            <input type="radio" name="pulse-map-style" value="dark">
+            <span class="radio-indicator"></span>
+            <span class="layer-name">Dark Street</span>
+            <span class="layer-badge">CARTO</span>
+          </label>
+          <label class="layer-radio-item" data-layer="satellite-plain">
+            <input type="radio" name="pulse-map-style" value="satellite-plain">
+            <span class="radio-indicator"></span>
+            <span class="layer-name">Satellite Plain</span>
+            <span class="layer-badge">MapTiler</span>
+          </label>
+          <label class="layer-radio-item" data-layer="satellite-hybrid">
+            <input type="radio" name="pulse-map-style" value="satellite-hybrid">
+            <span class="radio-indicator"></span>
+            <span class="layer-name">Satellite Hybrid</span>
+            <span class="layer-badge">MapTiler</span>
+          </label>
+          <label class="layer-radio-item" data-layer="osm">
+            <input type="radio" name="pulse-map-style" value="osm">
+            <span class="radio-indicator"></span>
+            <span class="layer-name">OpenStreetMap</span>
+            <span class="layer-badge">OSM</span>
+          </label>
+        </div>
+      </div>
     </div>
 
     <!-- VIEW 1: JOURNEY PLANNER (SPLIT MAP + SIDEBAR) -->
@@ -82,7 +128,7 @@
             <div class="form-group">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                 <label class="form-label" for="input-origin" style="margin-bottom: 0;">Origin</label>
-                <button type="button" id="btn-pick-origin" class="btn-text-sm" title="Click on map to select origin">📍 Pick on Map</button>
+                <button type="button" id="btn-pick-origin" class="btn-pick-map" title="Click on map to select origin">📍 Pick on Map</button>
               </div>
               <div class="input-with-icon autocomplete-wrapper">
                 <span class="input-icon">🟢</span>
@@ -100,7 +146,7 @@
             <div class="form-group">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                 <label class="form-label" for="input-dest" style="margin-bottom: 0;">Destination</label>
-                <button type="button" id="btn-pick-dest" class="btn-text-sm" title="Click on map to select destination">📍 Pick on Map</button>
+                <button type="button" id="btn-pick-dest" class="btn-pick-map" title="Click on map to select destination">📍 Pick on Map</button>
               </div>
               <div class="input-with-icon autocomplete-wrapper">
                 <span class="input-icon">🔴</span>

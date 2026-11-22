@@ -81,8 +81,12 @@ class RaptorRouter:
     """Executes multi-criteria round-based transit search over the GTFS network."""
 
     def __init__(self):
-        self.con = duckdb.connect(str(GTFS_DB_PATH), read_only=True)
-        self.con.execute("SET temp_directory = 'E:/Pulse/data/cache/duckdb';")
+        self._con = duckdb.connect(str(GTFS_DB_PATH), read_only=True)
+        self._con.execute("SET temp_directory = 'E:/Pulse/data/cache/duckdb';")
+
+    @property
+    def con(self):
+        return self._con.cursor()
 
     def _parse_time_str(self, time_str: str) -> int:
         parts = [int(p) for p in time_str.split(":")]

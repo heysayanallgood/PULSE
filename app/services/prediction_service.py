@@ -32,7 +32,7 @@ class TravelTimePredictionService:
             gtfs_path = Path("E:/Pulse/data/database/gtfs.duckdb")
             if gtfs_path.exists():
                 self._con.execute(f"ATTACH '{gtfs_path.as_posix()}' AS gtfs (READ_ONLY);")
-        return self._con
+        return self._con.cursor()
 
     def predict_segment_travel_time(
         self,

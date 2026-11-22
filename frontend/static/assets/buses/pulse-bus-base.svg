@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 120" width="32" height="60" shape-rendering="geometricPrecision">
+  <defs>
+    <filter id="bus-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="1" stdDeviation="3.0" flood-color="var(--bus-glow, #10B981)" flood-opacity="0.85"/>
+    </filter>
+    <linearGradient id="windshield-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#E0F2FE" />
+      <stop offset="100%" stop-color="#93C5FD" />
+    </linearGradient>
+  </defs>
+  <g filter="url(#bus-glow)">
+    <!-- 4 Side Wheels -->
+    <rect x="2" y="18" width="5" height="18" rx="2" fill="#1e293b"/>
+    <rect x="57" y="18" width="5" height="18" rx="2" fill="#1e293b"/>
+    <rect x="2" y="84" width="5" height="18" rx="2" fill="#1e293b"/>
+    <rect x="57" y="84" width="5" height="18" rx="2" fill="#1e293b"/>
+
+    <!-- Main Bus Chassis -->
+    <rect x="6" y="8" width="52" height="104" rx="10" ry="10" fill="var(--bus-body, #ffffff)" stroke="var(--bus-outline, #064E3B)" stroke-width="2.2"/>
+
+    <!-- Directional Headlight Beams (Front) -->
+    <polygon points="10,8 14,0 22,0 18,8" fill="#FEF08A" opacity="0.95"/>
+    <polygon points="54,8 50,0 42,0 46,8" fill="#FEF08A" opacity="0.95"/>
+
+    <!-- Front Bumper Color Strip -->
+    <rect x="14" y="6" width="36" height="5" rx="2" fill="var(--bus-glow, #10B981)"/>
+
+    <!-- Destination Display Strip -->
+    <rect x="16" y="13" width="32" height="6" rx="1.5" fill="#FACC15"/>
+
+    <!-- Curved Windshield with Gradient -->
+    <path d="M 12 24 Q 32 18 52 24 L 50 38 L 14 38 Z" fill="url(#windshield-grad)" stroke="#38bdf8" stroke-width="0.8"/>
+
+    <!-- Side Mirrors -->
+    <rect x="0" y="22" width="6" height="9" rx="2" fill="#334155"/>
+    <rect x="58" y="22" width="6" height="9" rx="2" fill="#334155"/>
+
+    <!-- Side Highlight Stripes -->
+    <line x1="8" y1="42" x2="8" y2="94" stroke="var(--bus-highlight, #86EFAC)" stroke-width="1.5"/>
+    <line x1="56" y1="42" x2="56" y2="94" stroke="var(--bus-highlight, #86EFAC)" stroke-width="1.5"/>
+
+    <!-- Side Windows (Left & Right strips) -->
+    <rect x="9" y="44" width="4" height="48" rx="1.5" fill="#334155"/>
+    <rect x="51" y="44" width="4" height="48" rx="1.5" fill="#334155"/>
+
+    <!-- Roof Top AC Climate Unit with Louvers -->
+    <rect x="18" y="48" width="28" height="28" rx="4" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
+    <line x1="22" y1="55" x2="42" y2="55" stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>
+    <line x1="22" y1="62" x2="42" y2="62" stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>
+    <line x1="22" y1="69" x2="42" y2="69" stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>
+
+    <!-- Rear Window & Taillights -->
+    <rect x="14" y="98" width="36" height="4" rx="1.5" fill="#0f172a"/>
+    <rect x="8" y="104" width="6" height="4" rx="1.5" fill="#EF4444"/>
+    <rect x="50" y="104" width="6" height="4" rx="1.5" fill="#EF4444"/>
+    <!-- Rear Bumper -->
+    <rect x="14" y="110" width="36" height="3" rx="1.5" fill="#1e293b"/>
+  </g>
+</svg>

@@ -26,7 +26,7 @@ class GTFSRepository:
             # Connect in read-only mode to prevent database locks
             self._con = duckdb.connect(str(self.db_path), read_only=True)
             self._con.execute("SET temp_directory = 'E:/Pulse/data/cache/duckdb';")
-        return self._con
+        return self._con.cursor()
 
     def _init_repository(self):
         """Initializes connection and builds in-memory spatial index for all stops."""
@@ -109,10 +109,12 @@ class GTFSRepository:
         idx_board = min(range(len(pts)), key=lambda i: dist_sq(pts[i], board_lat, board_lon))
         idx_alight = min(range(len(pts)), key=lambda i: dist_sq(pts[i], alight_lat, alight_lon))
 
-        if idx_board > idx_alight:
-            idx_board, idx_alight = idx_alight, idx_board
+        if idx_board <= idx_alight:
+            raw_clipped = pts[idx_board:idx_alight + 1]
+        else:
+            raw_clipped = pts[idx_board:idx_alight - 1:-1] if idx_alight > 0 else pts[idx_board::-1]
 
-        clipped = [[round(float(p[0]), 6), round(float(p[1]), 6)] for p in pts[idx_board:idx_alight + 1]]
+        clipped = [[round(float(p[0]), 6), round(float(p[1]), 6)] for p in raw_clipped]
         if len(clipped) < 2:
             return fallback
         return clipped

@@ -9,18 +9,25 @@
 const state = {
   currentView: 'journey',
   map: null,
+  baseLayers: {},
+  currentBaseLayer: null,
+  currentBaseLayerKey: 'positron',
   routeLayer: null,
+  originDestLayer: null,
   clusterGroup: null,
   busMarkers: new Map(), // vehicle_id -> L.Marker
   originPinMarker: null,
   destPinMarker: null,
-  pickMode: null, // 'origin' | 'dest' | null
+  originCoords: null,
+  destCoords: null,
+  pickMode: null, // 'origin' | 'destination' | null
   pollTimer: null,
   selectedOption: null,
   activeJourneyId: null,
   searchAbortController: null,
   _initialLiveFitted: false
 };
+window.state = state;
 
 // Safe JSON fetch wrapper with standardized error handling
 async function safeFetchJson(url, options = {}) {
@@ -67,7 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // ==========================================
 // 1. LEAFLET MAP INITIALIZATION & BASEMAPS
 // ==========================================
-function initMap() {
+async function initMap() {
   // Center on Central Delhi (Connaught Place)
   state.map = L.map('map-element', {
     zoomControl: false
@@ -76,12 +83,20 @@ function initMap() {
   L.control.zoom({ position: 'bottomright' }).addTo(state.map);
 
   // Retrieve injected client configurations
-  const cartoKey = (window.PULSE_CONFIG && window.PULSE_CONFIG.cartoApiKey) 
+  let cartoKey = (window.PULSE_CONFIG && window.PULSE_CONFIG.cartoApiKey) 
     ? window.PULSE_CONFIG.cartoApiKey.trim() 
     : 'cb1_5d19_1_258c3b9d8e04bf2290f574b2';
-  const maptilerKey = (window.PULSE_CONFIG && window.PULSE_CONFIG.maptilerApiKey) 
+  let maptilerKey = (window.PULSE_CONFIG && window.PULSE_CONFIG.maptilerApiKey) 
     ? window.PULSE_CONFIG.maptilerApiKey.trim() 
     : '';
+
+  try {
+    const mapCfg = await safeFetchJson('/api/v1/config/map');
+    if (mapCfg.carto_api_key) cartoKey = mapCfg.carto_api_key.trim();
+    if (mapCfg.maptiler_api_key) maptilerKey = mapCfg.maptiler_api_key.trim();
+  } catch (e) {
+    // Fall back to injected bootstrap keys
+  }
 
   const cartoAttr = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank">CARTO</a>';
   const osmAttr = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors';
@@ -89,7 +104,7 @@ function initMap() {
   const maptilerAttr = '&copy; <a href="https://www.maptiler.com/copyright/" target="_blank">MapTiler</a> &copy; OpenStreetMap contributors';
 
   // Base Layers
-  // 1. CARTO Positron (Default Light & Realistic Street Map)
+  // 1. CARTO Positron (Default Light Street Map)
   const positronUrl = cartoKey 
     ? `https://{s}.basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png?key=${encodeURIComponent(cartoKey)}`
     : 'https://{s}.basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png';
@@ -107,15 +122,16 @@ function initMap() {
     : 'https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png';
   const darkLayer = L.tileLayer(darkUrl, { attribution: cartoAttr, subdomains: 'abcd', maxZoom: 19 });
 
-  // 4a. Satellite Plain (MapTiler Satellite / Esri fallback)
+  // 4a. Satellite Plain (MapTiler Satellite v4 / Esri fallback)
   const satPlainUrl = maptilerKey 
     ? `https://api.maptiler.com/maps/satellite-v4/{z}/{x}/{y}.jpg?key=${encodeURIComponent(maptilerKey)}`
     : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
   const satellitePlainLayer = L.tileLayer(satPlainUrl, { 
     attribution: maptilerKey ? maptilerAttr : esriAttr, 
-    maxZoom: 19,
+    maxZoom: 20,
     tileSize: maptilerKey ? 512 : 256,
-    zoomOffset: maptilerKey ? -1 : 0
+    zoomOffset: maptilerKey ? -1 : 0,
+    crossOrigin: true
   });
 
   // 4b. Satellite Hybrid (MapTiler Hybrid with Road Overlays / Esri fallback)
@@ -124,36 +140,52 @@ function initMap() {
     : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
   const satelliteHybridLayer = L.tileLayer(satHybridUrl, { 
     attribution: maptilerKey ? maptilerAttr : esriAttr, 
-    maxZoom: 19,
+    maxZoom: 20,
     tileSize: maptilerKey ? 512 : 256,
-    zoomOffset: maptilerKey ? -1 : 0
+    zoomOffset: maptilerKey ? -1 : 0,
+    crossOrigin: true
   });
 
   // 5. OpenStreetMap Standard
   const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: osmAttr, maxZoom: 19 });
 
+  // Diagnostic Tile Error Handlers (Section 2.7)
+  [positronLayer, voyagerLayer, darkLayer, satellitePlainLayer, satelliteHybridLayer, osmLayer].forEach(layer => {
+    layer.on('tileerror', function() {
+      const statusDot = document.getElementById('layer-status-indicator');
+      if (statusDot) {
+        statusDot.className = 'layer-status-dot warning';
+        statusDot.title = 'Tile connection warning (fallback active)';
+      }
+    });
+  });
+
+  state.baseLayers = {
+    'positron': positronLayer,
+    'voyager': voyagerLayer,
+    'dark': darkLayer,
+    'satellite-plain': satellitePlainLayer,
+    'satellite-hybrid': satelliteHybridLayer,
+    'osm': osmLayer
+  };
+
   // Add default layer: Positron (Light)
   positronLayer.addTo(state.map);
+  state.currentBaseLayer = positronLayer;
+  state.currentBaseLayerKey = 'positron';
 
-  // Layer Switcher Control
-  const baseMaps = {
-    "☀️ Street (Positron)": positronLayer,
-    "🧭 Voyager (Detailed)": voyagerLayer,
-    "🌙 Dark Matter": darkLayer,
-    "🛰️ Satellite (Plain)": satellitePlainLayer,
-    "🛰️ Satellite (Hybrid)": satelliteHybridLayer,
-    "🗺️ OpenStreetMap": osmLayer
-  };
-  L.control.layers(baseMaps, null, { position: 'topright', collapsed: true }).addTo(state.map);
+  // Wire up visible styled Map Style Selector (Section 2.5)
+  initCustomLayerSelector(state.baseLayers);
 
   // Overlay Feature Groups
   state.routeLayer = L.featureGroup().addTo(state.map);
+  state.originDestLayer = L.featureGroup().addTo(state.map);
 
   // Marker Cluster Group for Live DTC Buses
   if (typeof L.markerClusterGroup === 'function') {
     state.clusterGroup = L.markerClusterGroup({
-      disableClusteringAtZoom: 14, // individual bus icons with bearings at zoom >= 14
-      maxClusterRadius: 50,
+      disableClusteringAtZoom: 13, // individual bus icons with bearings at zoom >= 13
+      maxClusterRadius: 45,
       spiderfyOnMaxZoom: true,
       showCoverageOnHover: false,
       zoomToBoundsOnClick: true,
@@ -170,10 +202,59 @@ function initMap() {
   } else {
     state.clusterGroup = L.featureGroup();
   }
-  state.clusterGroup.addTo(state.map);
+  // Initially not added to map since default view is Journey Planner
 
   // Map Click Listener for Coordinates & Picking
   state.map.on('click', onMapClick);
+}
+
+function initCustomLayerSelector(baseLayers) {
+  const labels = document.querySelectorAll('.layer-radio-item');
+  const radios = document.querySelectorAll('input[name="pulse-map-style"]');
+  const statusIndicator = document.getElementById('layer-status-indicator');
+
+  function switchLayer(layerKey) {
+    if (!baseLayers[layerKey]) return;
+
+    // Remove existing base layers
+    Object.values(baseLayers).forEach(layer => {
+      if (state.map.hasLayer(layer)) {
+        state.map.removeLayer(layer);
+      }
+    });
+
+    // Add selected layer
+    const newLayer = baseLayers[layerKey];
+    newLayer.addTo(state.map);
+    state.currentBaseLayer = newLayer;
+    state.currentBaseLayerKey = layerKey;
+
+    // Update active UI classes
+    labels.forEach(lbl => {
+      const isMatch = (lbl.dataset.layer === layerKey);
+      lbl.classList.toggle('active', isMatch);
+      const radio = lbl.querySelector('input[type="radio"]');
+      if (radio) radio.checked = isMatch;
+    });
+
+    if (statusIndicator) {
+      statusIndicator.className = 'layer-status-dot';
+      statusIndicator.title = `Active: ${layerKey}`;
+    }
+  }
+
+  labels.forEach(lbl => {
+    lbl.addEventListener('click', (e) => {
+      const key = lbl.dataset.layer;
+      switchLayer(key);
+    });
+  });
+
+  radios.forEach(r => {
+    r.addEventListener('change', () => {
+      switchLayer(r.value);
+    });
+  });
 }
 
 // ==========================================
@@ -181,16 +262,18 @@ function initMap() {
 // ==========================================
 function createBusSvg(freshnessState, bearing) {
   const glowColor = freshnessState === 'FRESH' ? '#10B981' : (freshnessState === 'AGING' ? '#F59E0B' : '#EF4444');
-  const strokeColor = freshnessState === 'FRESH' ? '#059669' : (freshnessState === 'AGING' ? '#D97706' : '#DC2626');
+  const strokeColor = freshnessState === 'FRESH' ? '#059669' : (freshnessState === 'AGING' ? '#92400E' : '#7F1D1D');
+  const highlightColor = freshnessState === 'FRESH' ? '#86EFAC' : (freshnessState === 'AGING' ? '#FDE68A' : '#FCA5A5');
   const rotation = (typeof bearing === 'number' && !isNaN(bearing)) ? Math.round(bearing) : 0;
-  const hasBearing = (typeof bearing === 'number' && !isNaN(bearing) && bearing > 0);
+  const hasBearing = (typeof bearing === 'number' && !isNaN(bearing) && bearing >= 0);
 
   return `
-    <div class="rapido-bus-icon" style="transform: rotate(${rotation}deg); transform-origin: center center;">
+    <div class="pulse-bus-rotate rapido-bus-icon" style="transform: rotate(${rotation}deg); transform-origin: center center;">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 120" width="32" height="60" shape-rendering="geometricPrecision">
         <defs>
           <filter id="bus-glow-${freshnessState}" x="-30%" y="-30%" width="160%" height="160%">
             <feDropShadow dx="0" dy="1" stdDeviation="3.0" flood-color="${glowColor}" flood-opacity="0.85"/>
+            <feDropShadow dx="0" dy="0" stdDeviation="6.0" flood-color="${glowColor}" flood-opacity="0.45"/>
           </filter>
           <linearGradient id="windshield-grad" x1="0%" y1="0%" x2="0%" y2="100%">
             <stop offset="0%" stop-color="#E0F2FE" />
@@ -224,6 +307,10 @@ function createBusSvg(freshnessState, bearing) {
           <rect x="0" y="22" width="6" height="9" rx="2" fill="#334155"/>
           <rect x="58" y="22" width="6" height="9" rx="2" fill="#334155"/>
           
+          <!-- Side Highlight Stripes -->
+          <line x1="8" y1="42" x2="8" y2="94" stroke="${highlightColor}" stroke-width="1.5"/>
+          <line x1="56" y1="42" x2="56" y2="94" stroke="${highlightColor}" stroke-width="1.5"/>
+
           <!-- Side Windows (Left & Right strips) -->
           <rect x="9" y="44" width="4" height="48" rx="1.5" fill="#334155"/>
           <rect x="51" y="44" width="4" height="48" rx="1.5" fill="#334155"/>
@@ -238,6 +325,8 @@ function createBusSvg(freshnessState, bearing) {
           <rect x="14" y="98" width="36" height="4" rx="1.5" fill="#0f172a"/>
           <rect x="8" y="104" width="6" height="4" rx="1.5" fill="#EF4444"/>
           <rect x="50" y="104" width="6" height="4" rx="1.5" fill="#EF4444"/>
+          <!-- Rear Bumper -->
+          <rect x="14" y="110" width="36" height="3" rx="1.5" fill="#1e293b"/>
         </g>
       </svg>
     </div>
@@ -246,16 +335,19 @@ function createBusSvg(freshnessState, bearing) {
 
 function getBusPopupHtml(b) {
   const freshnessColor = b.freshness === 'FRESH' ? '#10B981' : (b.freshness === 'AGING' ? '#F59E0B' : '#EF4444');
+  const speedDisplay = (b.speed_kmh !== null && !isNaN(b.speed_kmh)) ? `${b.speed_kmh} km/h` : 'UNKNOWN';
+  const bearingDisplay = (b.bearing !== null && !isNaN(b.bearing)) ? `${Math.round(b.bearing)}°` : 'UNKNOWN';
   return `
-    <div style="font-size: 12px; font-family: var(--font-sans); min-width: 180px; color: #1e293b;">
+    <div style="font-size: 12px; font-family: var(--font-sans); min-width: 190px; color: #1e293b;">
       <div style="font-weight: 800; font-size: 13px; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 6px;">
-        🚍 ${b.vehicle_id}
+        🚍 DTC Bus ${b.vehicle_id}
       </div>
       <div><b>Route:</b> ${b.route_id ? 'Route ' + b.route_id : 'DTC Corridor'}</div>
       <div><b>Trip ID:</b> ${b.trip_id || 'N/A'}</div>
-      <div><b>Speed:</b> ${b.speed_kmh !== null ? b.speed_kmh + ' km/h' : 'UNKNOWN'}</div>
+      <div><b>Speed:</b> ${speedDisplay}</div>
+      <div><b>Bearing:</b> ${bearingDisplay}</div>
       <div><b>Freshness:</b> <span style="font-weight: 700; color: ${freshnessColor};">${b.freshness}</span> (${b.age_seconds}s ago)</div>
-      <div><b>Matching:</b> ${b.route_id ? 'Matched to GTFS Corridor' : 'Raw AVL Position'}</div>
+      <div><b>Provenance:</b> <span style="color: #059669; font-weight: 700;">LIVE</span></div>
     </div>
   `;
 }
@@ -293,7 +385,7 @@ async function loadLiveBuses() {
         const iconHtml = createBusSvg(b.freshness, b.bearing);
         marker.setIcon(L.divIcon({
           html: iconHtml,
-          className: 'rapido-bus-marker',
+          className: 'pulse-bus-marker',
           iconSize: [32, 60],
           iconAnchor: [16, 30],
           popupAnchor: [0, -28]
@@ -304,7 +396,7 @@ async function loadLiveBuses() {
         const iconHtml = createBusSvg(b.freshness, b.bearing);
         const icon = L.divIcon({
           html: iconHtml,
-          className: 'rapido-bus-marker',
+          className: 'pulse-bus-marker',
           iconSize: [32, 60],
           iconAnchor: [16, 30],
           popupAnchor: [0, -28]
@@ -346,61 +438,83 @@ function initMapPickMode() {
   const btnCancel = document.getElementById('btn-cancel-pick');
 
   if (btnPickOrig) {
-    btnPickOrig.addEventListener('click', () => startPickMode('origin'));
+    btnPickOrig.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (state.pickMode === 'origin') cancelPickMode();
+      else startPickMode('origin');
+    });
   }
   if (btnPickDest) {
-    btnPickDest.addEventListener('click', () => startPickMode('dest'));
+    btnPickDest.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (state.pickMode === 'destination') cancelPickMode();
+      else startPickMode('destination');
+    });
   }
   if (btnCancel) {
-    btnCancel.addEventListener('click', cancelPickMode);
+    btnCancel.addEventListener('click', (e) => {
+      e.preventDefault();
+      cancelPickMode();
+    });
   }
 }
 
 function startPickMode(target) {
-  state.pickMode = target;
+  state.pickMode = target; // 'origin' or 'destination'
   const banner = document.getElementById('map-selection-banner');
   const text = document.getElementById('map-selection-text');
-  if (banner && text) {
-    banner.style.display = 'flex';
-    text.innerText = target === 'origin' 
-      ? '📍 Click anywhere on the map to set Origin...' 
-      : '📍 Click anywhere on the map to set Destination...';
+  const btnOrig = document.getElementById('btn-pick-origin');
+  const btnDest = document.getElementById('btn-pick-dest');
+
+  if (target === 'origin') {
+    if (btnOrig) btnOrig.classList.add('active');
+    if (btnDest) btnDest.classList.remove('active');
+    if (text) text.innerText = '📍 PICK ORIGIN: Click anywhere on the map to select your starting point.';
+  } else {
+    if (btnDest) btnDest.classList.add('active');
+    if (btnOrig) btnOrig.classList.remove('active');
+    if (text) text.innerText = '📍 PICK DESTINATION: Click anywhere on the map to select your destination.';
   }
-  state.map.getContainer().style.cursor = 'crosshair';
+  if (banner) banner.style.display = 'flex';
+  if (state.map) state.map.getContainer().style.cursor = 'crosshair';
 }
 
 function cancelPickMode() {
   state.pickMode = null;
   const banner = document.getElementById('map-selection-banner');
   if (banner) banner.style.display = 'none';
-  state.map.getContainer().style.cursor = '';
+  const btnOrig = document.getElementById('btn-pick-origin');
+  const btnDest = document.getElementById('btn-pick-dest');
+  if (btnOrig) btnOrig.classList.remove('active');
+  if (btnDest) btnDest.classList.remove('active');
+  if (state.map) state.map.getContainer().style.cursor = '';
 }
 
 function onMapClick(e) {
   const { lat, lng } = e.latlng;
-  const latStr = lat.toFixed(5);
-  const lonStr = lng.toFixed(5);
-  const coordStr = `${latStr}, ${lonStr}`;
+  const latNum = parseFloat(lat.toFixed(5));
+  const lonNum = parseFloat(lng.toFixed(5));
+  const coordStr = `${latNum.toFixed(4)}, ${lonNum.toFixed(4)}`;
 
   if (state.pickMode === 'origin') {
-    setOrigin(coordStr, lat, lng);
+    setOrigin(coordStr, latNum, lonNum);
     cancelPickMode();
     return;
-  } else if (state.pickMode === 'dest') {
-    setDestination(coordStr, lat, lng);
+  } else if (state.pickMode === 'destination' || state.pickMode === 'dest') {
+    setDestination(coordStr, latNum, lonNum);
     cancelPickMode();
     return;
   }
 
-  // If not in pick mode, show mini context popup
+  // If not in pick mode, show mini context popup on Journey Planner
   if (state.currentView === 'journey') {
     const popupContent = `
       <div class="map-context-popup">
         <div style="font-weight: 700; margin-bottom: 4px;">📍 Selected Location</div>
         <div style="color: #64748b; font-size: 11px; margin-bottom: 8px;">${coordStr}</div>
         <div style="display: flex; gap: 6px;">
-          <button onclick="setOrigin('${coordStr}', ${lat}, ${lng}); state.map.closePopup();" class="btn-popup btn-popup-green">🟢 Set Origin</button>
-          <button onclick="setDestination('${coordStr}', ${lat}, ${lng}); state.map.closePopup();" class="btn-popup btn-popup-red">🔴 Set Destination</button>
+          <button onclick="setOrigin('${coordStr}', ${latNum}, ${lonNum}); state.map.closePopup();" class="btn-popup btn-popup-green">🟢 Set Origin</button>
+          <button onclick="setDestination('${coordStr}', ${latNum}, ${lonNum}); state.map.closePopup();" class="btn-popup btn-popup-red">🔴 Set Destination</button>
         </div>
       </div>
     `;
@@ -411,32 +525,38 @@ function onMapClick(e) {
 window.setOrigin = function(name, lat, lon) {
   const input = document.getElementById('input-origin');
   if (input) input.value = name;
+  state.originCoords = { lat, lon, name };
 
-  if (state.originPinMarker) state.routeLayer.removeLayer(state.originPinMarker);
+  if (state.originPinMarker) state.originDestLayer.removeLayer(state.originPinMarker);
   if (typeof lat === 'number' && typeof lon === 'number') {
-    state.originPinMarker = L.circleMarker([lat, lon], {
-      radius: 8,
-      color: '#00e676',
-      fillColor: '#00e676',
-      fillOpacity: 0.9,
-      weight: 2
-    }).bindPopup(`<b>Origin:</b> ${name}`).addTo(state.routeLayer);
+    state.originPinMarker = L.marker([lat, lon], {
+      icon: L.divIcon({
+        className: 'pulse-pin-marker',
+        html: `<div class="pulse-pin pin-origin" title="Selected Origin"><span class="pulse-pin-dot"></span></div>`,
+        iconSize: [24, 24],
+        iconAnchor: [12, 24],
+        popupAnchor: [0, -24]
+      })
+    }).bindPopup(`<b>Selected Origin:</b><br/>${name}`).addTo(state.originDestLayer);
   }
 };
 
 window.setDestination = function(name, lat, lon) {
   const input = document.getElementById('input-dest');
   if (input) input.value = name;
+  state.destCoords = { lat, lon, name };
 
-  if (state.destPinMarker) state.routeLayer.removeLayer(state.destPinMarker);
+  if (state.destPinMarker) state.originDestLayer.removeLayer(state.destPinMarker);
   if (typeof lat === 'number' && typeof lon === 'number') {
-    state.destPinMarker = L.circleMarker([lat, lon], {
-      radius: 8,
-      color: '#ff1744',
-      fillColor: '#ff1744',
-      fillOpacity: 0.9,
-      weight: 2
-    }).bindPopup(`<b>Destination:</b> ${name}`).addTo(state.routeLayer);
+    state.destPinMarker = L.marker([lat, lon], {
+      icon: L.divIcon({
+        className: 'pulse-pin-marker',
+        html: `<div class="pulse-pin pin-dest" title="Selected Destination"><span class="pulse-pin-dot"></span></div>`,
+        iconSize: [24, 24],
+        iconAnchor: [12, 24],
+        popupAnchor: [0, -24]
+      })
+    }).bindPopup(`<b>Selected Destination:</b><br/>${name}`).addTo(state.originDestLayer);
   }
 };
 
@@ -489,6 +609,18 @@ function setupAutocomplete(inputId, dropdownId, onSelect) {
   input.addEventListener('focus', () => {
     if (dropdown.children.length > 0 && input.value.trim().length >= 2) {
       dropdown.style.display = 'block';
+    }
+  });
+
+  input.addEventListener('blur', () => {
+    setTimeout(() => {
+      dropdown.style.display = 'none';
+    }, 250);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || e.key === 'Enter') {
+      dropdown.style.display = 'none';
     }
   });
 }
@@ -556,6 +688,9 @@ function switchView(viewName) {
     if (state.map && !state.map.hasLayer(state.routeLayer)) {
       state.map.addLayer(state.routeLayer);
     }
+    if (state.map && !state.map.hasLayer(state.originDestLayer)) {
+      state.map.addLayer(state.originDestLayer);
+    }
     if (state.map && state.map.hasLayer(state.clusterGroup)) {
       state.map.removeLayer(state.clusterGroup);
     }
@@ -569,6 +704,9 @@ function switchView(viewName) {
     }
     if (state.map && state.map.hasLayer(state.routeLayer)) {
       state.map.removeLayer(state.routeLayer);
+    }
+    if (state.map && state.map.hasLayer(state.originDestLayer)) {
+      state.map.removeLayer(state.originDestLayer);
     }
     loadLiveBuses();
     if (!state.pollTimer) {
@@ -628,6 +766,12 @@ function initJourneyForm() {
 
     if (!from || !to) return;
 
+    // Close any open autocomplete suggestion dropdowns
+    const origDrop = document.getElementById('origin-suggestions');
+    const destDrop = document.getElementById('dest-suggestions');
+    if (origDrop) origDrop.style.display = 'none';
+    if (destDrop) destDrop.style.display = 'none';
+
     // Abort previous pending query if active
     if (state.searchAbortController) {
       state.searchAbortController.abort();
@@ -649,11 +793,6 @@ function initJourneyForm() {
       showLoadingState(false);
     }
   });
-
-  // Auto trigger default search for Kashmere Gate to Nehru Place
-  setTimeout(() => {
-    form.dispatchEvent(new Event('submit'));
-  }, 500);
 }
 
 function showLoadingState(isLoading) {
@@ -870,6 +1009,13 @@ function highlightJourneyOnMap(option) {
       }
     }
   });
+
+  if (state.originCoords && typeof state.originCoords.lat === 'number') {
+    allBounds.push([state.originCoords.lat, state.originCoords.lon]);
+  }
+  if (state.destCoords && typeof state.destCoords.lat === 'number') {
+    allBounds.push([state.destCoords.lat, state.destCoords.lon]);
+  }
 
   if (allBounds.length > 0) {
     state.map.fitBounds(L.latLngBounds(allBounds), { padding: [50, 50] });
