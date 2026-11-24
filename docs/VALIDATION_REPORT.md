@@ -1,61 +1,45 @@
-# PULSE — Validation, Benchmarking & Model Evaluation Report
-**Project:** Predictive Urban Mobility & Live Spatiotemporal Engine (PULSE)  
-**Team:** HopCode | **Hackathon:** Transport Stack Hackathon 2026 (Problem 1)  
-**Evaluation Dataset:** October 2026 Delhi DTC Fleet AVL Archive (Holdout Days 25–31)  
-**Evaluation Standard:** Observed Bus Trip Times vs. Static GTFS Timetable vs. Google Maps Transit Benchmarks  
+# PULSE Validation Report
 
----
+_Generated 2026-11-23T19:07:20.401591+00:00 by `scripts/build_traffic_model.py evaluate`. Every number below is computed; none is typed by hand._
 
-## 1. Executive Summary
+## Method
 
-A core requirement of Problem 1 is:
-> "Accuracy of travel-time estimates against observed trips and Google Maps. PULSE must estimate in-vehicle time from your model of how fast buses actually move, not only from the timetable. A trip at 9 am on a weekday should not get the same estimate as the same trip at 11 pm."
+- Training days: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]; test days (held out): [25, 26, 27, 28, 29, 30, 31].
+- Ground truth: Real bus runs on held-out days: a start ping and the first ping 2–15 km further along the same vehicle's trip shape (no gap > 5 min). Actual time = GPS fix-time difference.
+- PULSE: Per-stretch travel-time model, clock advanced stretch by stretch from the real departure time.
+- Timetable baseline: GTFS stop_times for the trip with the same route and HH_MM start, interpolated by distance along the shape. Matched for 41.8% of runs.
+- Flat-speed baseline: Same distance at the network's all-day average bus speed (no time-of-day model).
+- Model cells backed by direct measurements: 22.2%.
 
-To validate PULSE empirically without data leakage:
-1. **Chronological Holdout Split**: Days 1–24 were designated as the training corpus; Days 25–31 were strictly reserved as the independent holdout evaluation set.
-2. **Corridor Selection**: Benchmarks were measured across five high-frequency transit corridors in Delhi, spanning radial arterials (e.g. Vikas Marg, Ring Road, Outer Ring Road) and cross-city routes.
-3. **Findings**:
-   - **Static GTFS Timetables** exhibited severe underestimation during peak hours, yielding a **Mean Absolute Error (MAE) of 34.9 minutes**.
-   - **PULSE Spatiotemporal Model** achieved an **MAE of 1.9 minutes** and **Root Mean Squared Error (RMSE) of 2.1 minutes**, achieving a **94.6% error reduction** compared to static schedules.
-   - Predictions tracked real Google Maps transit estimates with **96.5% mean accuracy**.
+## Overall
 
----
+| Predictor | Runs | MAE (min) | Median abs err (min) | RMSE (min) | Within ±5 min | Within ±20% |
+|---|---|---|---|---|---|---|
+| PULSE model | 10,500 | 4.61 | 2.47 | 8.03 | 71.9% | 63.7% |
+| Flat average speed | 10,500 | 6.77 | 4.54 | 10.4 | 53.6% | 38.6% |
+| Static GTFS timetable | 4,387 | 6.57 | 4.23 | 10.35 | 56.6% | 39.9% |
+| PULSE (same runs as timetable) | 4,387 | 4.25 | 2.32 | 7.24 | 73.8% | 65.2% |
 
-## 2. Experimental Benchmark Results
+PULSE uncertainty band (p10–p90 style) contained the actual time in 84.2% of runs.
 
-| Corridor | Departure Time | Distance | Static GTFS Timetable | Observed DTC Bus Trip | PULSE Predicted Duration | Google Maps Transit | PULSE Absolute Error | Timetable Error | Model Accuracy |
-|---|---|---|---|---|---|---|---|---|---|
-| **Kashmere Gate ISBT to Nehru Place** | 08:30 (AM Peak) | 17.6 km | 45.0 min | 83.2 min | **81.4 min** | 85.0 min | **1.8 min** | -38.2 min | **97.8%** |
-| **Kashmere Gate ISBT to Nehru Place** | 23:00 (Late Night) | 17.6 km | 45.0 min | 31.5 min | **33.2 min** | 32.0 min | **1.7 min** | +13.5 min | **94.6%** |
-| **Anand Vihar ISBT to Dhaula Kuan** | 09:00 (AM Peak) | 21.4 km | 55.0 min | 98.4 min | **95.8 min** | 100.0 min | **2.6 min** | -43.4 min | **97.4%** |
-| **Anand Vihar ISBT to Dhaula Kuan** | 14:00 (Midday) | 21.4 km | 55.0 min | 63.8 min | **62.1 min** | 65.0 min | **1.7 min** | -8.8 min | **97.3%** |
-| **Old Delhi to Sabha Pur (Route 1728)** | 18:30 (PM Peak) | 14.8 km | 40.0 min | 79.6 min | **81.3 min** | 82.0 min | **1.7 min** | -39.6 min | **97.9%** |
+## By time of day
 
----
+| Band | Runs | PULSE MAE | Flat MAE | Timetable MAE |
+|---|---|---|---|---|
+| night 00-06 | 252 | 2.92 | 8.4 | 7.21 |
+| am peak 07-10 | 2,463 | 3.89 | 5.69 | 5.48 |
+| midday 11-16 | 3,215 | 4.67 | 6.26 | 6.21 |
+| pm peak 17-20 | 3,018 | 5.99 | 8.56 | 8.8 |
+| evening 21-23 | 1,265 | 3.39 | 5.26 | 4.74 |
 
-## 3. Statistical Performance Metrics
+## By trip length
 
-| Metric | PULSE Spatiotemporal Model | Static GTFS Timetable Baseline | Performance Delta |
+| Length | Runs | PULSE MAE | Within ±20% |
 |---|---|---|---|
-| **Mean Absolute Error (MAE)** | **1.90 minutes** | 34.90 minutes | **-94.6% Error Reduction** |
-| **Root Mean Squared Error (RMSE)** | **2.08 minutes** | 37.82 minutes | **-94.5% Variance Reduction** |
-| **Mean Absolute Percentage Error (MAPE)** | **2.8%** | 56.4% | **Significant Accuracy Gain** |
-| **Peak-Hour Error (08:00 - 10:30, 17:30 - 20:30)** | **2.03 minutes** | 40.40 minutes | **Eliminates Peak Schedule Collapse** |
-| **Off-Peak Error (22:00 - 05:00)** | **1.70 minutes** | 13.50 minutes | **Tracks Free-Flow Velocity** |
+| 2-5 km | 4,658 | 3.77 | 58.4% |
+| 5-10 km | 5,741 | 5.25 | 67.8% |
+| 10-15 km | 101 | 6.36 | 72.3% |
 
-```mermaid
-xychart-beta
-    title "Travel Time Comparison: Kashmere Gate to Nehru Place (17.6 km)"
-    x-axis ["Static Timetable", "Observed 08:30 Peak", "PULSE 08:30 Peak", "Observed 23:00 Night", "PULSE 23:00 Night"]
-    y-axis "Minutes" 0 --> 100
-    bar [45, 83.2, 81.4, 31.5, 33.2]
-```
+## Google Maps
 
----
-
-## 4. Key Modeling Insights & Explanations
-
-1. **The Static Timetable Trap**: The published Delhi GTFS schedule assumes constant transit speeds (~23.5 km/h) regardless of the hour. During the morning peak on arterial corridors (e.g. Ring Road through ITO and Ashram), actual bus speeds drop to 11–13 km/h. Passengers relying on static timetables experience catastrophic arrival delays of 35–45 minutes.
-2. **Empirical Quantile Superiority**: By modeling 10th, 50th, and 90th percentiles across 15-minute time buckets, PULSE produces bounded uncertainty intervals (`lower_bound` to `upper_bound`) that encompass 92% of real observed trips.
-3. **Off-Peak Traffic Unlocking**: Commuters traveling at 11:00 PM on the same corridor save **48.2 minutes** compared to the 08:30 AM peak. PULSE is one of the few transit engines to natively capture this off-peak acceleration without hardcoded adjustments.
-4. **Google Maps Correlation**: Google Maps transit directions for the same routes closely align with PULSE estimates (within 2–4 minutes), demonstrating that bus-fleet moving sensors match proprietary commercial traffic telemetry.
+Not run yet. `scripts/compare_google.py` queries the Google Routes API (transit) and needs GOOGLE_MAPS_API_KEY.

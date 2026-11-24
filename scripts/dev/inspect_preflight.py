@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 
 def inspect_sqlite():
-    db_path = "E:/Pulse/delhi-dtc-bus-gtfs-rt-2026-10/bus_movements_2026_10_01.db"
+    db_path = "delhi-dtc-bus-gtfs-rt-2026-10/bus_movements_2026_10_01.db"
     print(f"=== Inspecting SQLite DB: {db_path} ===")
     if not os.path.exists(db_path):
         print(f"File not found: {db_path}")
@@ -51,7 +51,7 @@ def inspect_sqlite():
     conn.close()
 
 def inspect_gtfs():
-    gtfs_dir = "E:/Pulse/delhi_buses_static_gtfs_v1"
+    gtfs_dir = "delhi_buses_static_gtfs_v1"
     print(f"\n=== Inspecting Static GTFS in: {gtfs_dir} ===")
     files = ["agency.txt", "calendar.txt", "feed_info.txt", "routes.txt", "shapes.txt", "stops.txt", "trips.txt", "stop_times.txt"]
     for f in files:

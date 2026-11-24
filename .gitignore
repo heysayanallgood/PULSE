@@ -39,3 +39,38 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Derived pipeline outputs (rebuild with scripts/build_traffic_model.py)
+data/processed/snapped/
+data/processed/cells/
+data/models/traffic_model/
+data/manifests/snap_day_*.json
+
+# Additional secrets
+.env.*
+!.env.example
+
+# Local AI coding-agent configuration
+.claude/
+
+# All local database and analytical files
+*.sqlite
+*.sqlite3
+*.duckdb
+*.duckdb.wal
+*.parquet
+
+# Local raw and processed data directories
+data/raw/
+data/processed/
+data/cache/
+data/staging/
+data/database/
+
+# Local model artefacts
+data/models/
+
+# Temporary files
+*.tmp
+*.bak
+

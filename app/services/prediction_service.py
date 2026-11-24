@@ -1,124 +1,74 @@
 """
-PULSE Spatiotemporal Prediction Service (app/services/prediction_service.py)
-Implements ADR 002, ADR 004, ADR 005.
-Provides sub-millisecond predicted travel times for route segments,
-aggregates route in-vehicle durations, and computes multi-time-of-day traffic comparisons.
+PULSE travel-time prediction service (app/services/prediction_service.py)
+
+Thin service over app.models.traffic_model.TrafficModel — the per-stretch
+model trained from real DTC GPS by scripts/build_traffic_model.py.
+
+If the model has not been built, predictions fall back to a straight
+distance at 15 km/h and are labelled UNTRAINED so nobody mistakes them for
+model output.
 """
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
+from __future__ import annotations
+
 import math
-import duckdb
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import settings
 from app.core.logging import logger
+from app.models.traffic_model import MODEL_DIR_NAME, TrafficModel
 
-MODEL_DB_PATH = Path("E:/Pulse/data/database/travel_time.duckdb")
-GTFS_DB_PATH = Path("E:/Pulse/data/database/gtfs.duckdb")
+MODEL_DIR = settings.MODEL_ROOT / MODEL_DIR_NAME
+_UNTRAINED_SPEED_MPS = 15 / 3.6
 
 
 class TravelTimePredictionService:
-    """Service for predicting time-dependent bus in-vehicle travel times."""
+    def __init__(self, model_dir: Optional[Path] = None):
+        self.model = TrafficModel(model_dir or MODEL_DIR)
+        self._stop_dist: Optional[Dict[Tuple[str, str], float]] = None
+        self._warned = False
 
-    def __init__(self, db_path: Optional[Path] = None):
-        self.db_path = db_path or MODEL_DB_PATH
-        self._con: Optional[duckdb.DuckDBPyConnection] = None
+    # ── loading ──────────────────────────────────────────────────────────────
+    def ensure_loaded(self) -> bool:
+        if self.model.ready:
+            return True
+        ok = self.model.load()
+        if not ok and not self._warned:
+            logger.warning(f"Traffic model not found in {MODEL_DIR}. Run scripts/build_traffic_model.py all.")
+            self._warned = True
+        return ok
 
-    def _get_connection(self) -> duckdb.DuckDBPyConnection:
-        if self._con is None:
-            self._con = duckdb.connect(str(self.db_path), read_only=True)
-            self._con.execute("SET temp_directory = 'E:/Pulse/data/cache/duckdb';")
-            # Attach GTFS database as schema gtfs
-            gtfs_path = Path("E:/Pulse/data/database/gtfs.duckdb")
-            if gtfs_path.exists():
-                self._con.execute(f"ATTACH '{gtfs_path.as_posix()}' AS gtfs (READ_ONLY);")
-        return self._con.cursor()
+    def stop_position(self, shape_id: str, stop_id: str) -> Optional[float]:
+        """Distance (m) of a stop along a shape, or None."""
+        if self._stop_dist is None:
+            self._stop_dist = {}
+            f = MODEL_DIR / "stop_shape_dist.parquet"
+            if f.exists():
+                try:
+                    import pyarrow.parquet as pq
+                    t = pq.read_table(f, columns=["shape_id", "stop_id", "dist_m"]).to_pydict()
+                    self._stop_dist = {(s, st): float(d) for s, st, d in zip(t["shape_id"], t["stop_id"], t["dist_m"])}
+                except Exception as exc:  # pragma: no cover
+                    logger.error(f"Could not read stop positions: {exc}")
+        return self._stop_dist.get((str(shape_id), str(stop_id)))
 
-    def predict_segment_travel_time(
-        self,
-        route_id: str,
-        segment_id: str,
-        time_bucket_15min: int,
-        is_weekend: int = 0
-    ) -> Dict[str, Any]:
-        """
-        Retrieves predicted travel time and uncertainty variance for a single segment.
-        """
-        con = self._get_connection()
-        bucket = max(0, min(95, int(time_bucket_15min)))
-        
-        row = con.execute("""
-            SELECT 
-                segment_id,
-                route_id,
-                length_m,
-                speed_median_mps,
-                travel_time_median_s,
-                travel_time_variance,
-                sample_count,
-                confidence,
-                provenance
-            FROM travel_time_model
-            WHERE route_id = ? AND segment_id = ? AND time_bucket_15min = ? AND is_weekend = ?
-            LIMIT 1;
-        """, [str(route_id), segment_id, bucket, is_weekend]).fetchone()
-
-        if row:
-            return {
-                "segment_id": row[0],
-                "route_id": row[1],
-                "length_m": row[2],
-                "speed_median_mps": row[3],
-                "travel_time_s": row[4],
-                "variance": row[5],
-                "sample_count": row[6],
-                "confidence": row[7],
-                "provenance": row[8]
-            }
-
-        # Fallback to route-independent segment query if route_id not directly mapped
-        row_fallback = con.execute("""
-            SELECT 
-                segment_id,
-                route_id,
-                length_m,
-                speed_median_mps,
-                travel_time_median_s,
-                travel_time_variance,
-                sample_count,
-                confidence,
-                provenance
-            FROM travel_time_model
-            WHERE segment_id = ? AND time_bucket_15min = ? AND is_weekend = ?
-            LIMIT 1;
-        """, [segment_id, bucket, is_weekend]).fetchone()
-
-        if row_fallback:
-            return {
-                "segment_id": row_fallback[0],
-                "route_id": row_fallback[1],
-                "length_m": row_fallback[2],
-                "speed_median_mps": row_fallback[3],
-                "travel_time_s": row_fallback[4],
-                "variance": row_fallback[5],
-                "sample_count": row_fallback[6],
-                "confidence": "MEDIUM",
-                "provenance": "ESTIMATED_FALLBACK"
-            }
-
-        # Global network default fallback
+    def status(self) -> Dict[str, Any]:
+        ready = self.ensure_loaded()
+        if not ready:
+            return {"status": "UNTRAINED", "model_dir": str(MODEL_DIR)}
+        m = self.model.meta
         return {
-            "segment_id": segment_id,
-            "route_id": str(route_id),
-            "length_m": 400.0,
-            "speed_median_mps": 5.0,
-            "travel_time_s": 80.0,
-            "variance": 16.0,
-            "sample_count": 0,
-            "confidence": "LOW",
-            "provenance": "ESTIMATED_FALLBACK"
+            "status": "READY",
+            "built_at": m.get("built_at"),
+            "train_days": m.get("train_days"),
+            "segments": m.get("segments"),
+            "segments_with_any_gps": m.get("segments_with_any_gps"),
+            "cells_measured_pct": m.get("cells_measured_pct"),
+            "cells_by_source": m.get("cells_by_source"),
+            "estimator": m.get("estimator"),
         }
 
+    # ── prediction ───────────────────────────────────────────────────────────
     def predict_leg_travel_time(
         self,
         route_id: str,
@@ -126,139 +76,53 @@ class TravelTimePredictionService:
         start_dist_m: float,
         end_dist_m: float,
         departure_time_seconds: int,
-        is_weekend: int = 0
+        is_weekend: int = 0,
     ) -> Dict[str, Any]:
-        """
-        Computes dynamic travel time for a sequence of segments along a shape between start and end distances.
-        Updates arrival clock dynamically across segments.
-        """
-        con = self._get_connection()
-        d_min = min(start_dist_m, end_dist_m)
-        d_max = max(start_dist_m, end_dist_m)
-
-        # Retrieve all segments lying between d_min and d_max
-        segments = con.execute("""
-            SELECT 
-                segment_id,
-                segment_sequence,
-                start_dist_m,
-                end_dist_m,
-                length_m
-            FROM gtfs.route_segments
-            WHERE shape_id = ?
-              AND end_dist_m >= ?
-              AND start_dist_m <= ?
-            ORDER BY segment_sequence ASC;
-        """, [shape_id, d_min, d_max]).fetchall()
-
-        if not segments:
-            # Fallback estimation based on distance
-            dist = max(100.0, d_max - d_min)
-            hour = (departure_time_seconds // 3600) % 24
-            speed = 4.0 if 8 <= hour <= 10 or 17 <= hour <= 20 else 7.5
-            tt = dist / speed
-            return {
-                "total_travel_time_s": round(tt, 1),
-                "total_distance_m": round(dist, 1),
-                "segment_count": 0,
-                "confidence": "LOW",
-                "provenance": "ESTIMATED_FALLBACK",
-                "lower_bound_s": round(tt * 0.85, 1),
-                "upper_bound_s": round(tt * 1.35, 1)
-            }
-
-        total_tt = 0.0
-        total_dist = 0.0
-        total_var = 0.0
-        current_time_s = departure_time_seconds
-        sample_counts = []
-
-        for seg_id, seq, s_start, s_end, s_len in segments:
-            # Fraction of segment traversed
-            overlap_start = max(d_min, s_start)
-            overlap_end = min(d_max, s_end)
-            overlap_len = max(10.0, overlap_end - overlap_start)
-            ratio = overlap_len / max(s_len, 1.0)
-
-            # Determine 15-min bucket for current arrival clock
-            current_hour = (int(current_time_s) // 3600) % 24
-            current_minute = (int(current_time_s) % 3600) // 60
-            bucket = (current_hour * 4 + current_minute // 15) % 96
-
-            pred = self.predict_segment_travel_time(route_id, seg_id, bucket, is_weekend)
-            seg_duration = pred["travel_time_s"] * ratio
-            
-            total_tt += seg_duration
-            total_dist += overlap_len
-            total_var += pred["variance"] * ratio
-            current_time_s += seg_duration
-            sample_counts.append(pred["sample_count"])
-
-        std_dev = math.sqrt(max(total_var, 4.0))
-        lower_bound = max(total_dist / 15.0, total_tt - 1.28 * std_dev)
-        upper_bound = total_tt + 1.28 * std_dev
-
-        avg_samples = sum(sample_counts) / max(len(sample_counts), 1)
-        conf = "HIGH" if avg_samples >= 15 else ("MEDIUM" if avg_samples >= 5 else "LOW")
-        prov = "HISTORICAL" if avg_samples >= 5 else "ESTIMATED_FALLBACK"
-
+        if self.ensure_loaded():
+            return self.model.predict_leg(str(shape_id), float(start_dist_m), float(end_dist_m),
+                                          int(departure_time_seconds), int(is_weekend))
+        dist = max(100.0, abs(end_dist_m - start_dist_m))
+        tt = dist / _UNTRAINED_SPEED_MPS
         return {
-            "total_travel_time_s": round(total_tt, 1),
-            "total_distance_m": round(total_dist, 1),
-            "segment_count": len(segments),
-            "confidence": conf,
-            "provenance": prov,
-            "lower_bound_s": round(lower_bound, 1),
-            "upper_bound_s": round(upper_bound, 1),
-            "variance": round(total_var, 1)
+            "total_travel_time_s": round(tt, 1), "total_distance_m": round(dist, 1), "segment_count": 0,
+            "confidence": "NONE", "provenance": "UNTRAINED", "source_mix": {"UNTRAINED": 1.0},
+            "measured_share": 0.0, "lower_bound_s": round(tt * 0.7, 1), "upper_bound_s": round(tt * 1.5, 1),
+            "variance": round((0.3 * tt) ** 2, 1), "free_flow_s": round(tt, 1), "congestion_index": 1.0,
+            "median_samples": 0,
         }
 
-    def compare_departure_times(
-        self,
-        route_id: str,
-        shape_id: str,
-        start_dist_m: float,
-        end_dist_m: float,
-        is_weekend: int = 0
-    ) -> List[Dict[str, Any]]:
-        """
-        Compares predicted travel times for a corridor across key periods of the day.
-        Directly satisfies the Problem 1 benchmark requirement.
-        """
-        test_hours = [
-            (8, 30, "Morning Peak (08:30)"),
-            (11, 0, "Midday Off-Peak (11:00)"),
-            (14, 0, "Afternoon (14:00)"),
-            (18, 30, "Evening Peak (18:30)"),
-            (23, 0, "Late Night (23:00)")
-        ]
+    def leg_heat(self, shape_id: str, d0: float, d1: float, depart_s: int, weekend: int) -> list:
+        if not self.ensure_loaded():
+            return []
+        from app.data.gtfs.repository import gtfs_repo
+        return self.model.leg_heat(str(shape_id), float(d0), float(d1), int(depart_s), int(weekend),
+                                   gtfs_repo.get_shape_points(str(shape_id)))
 
-        results = []
-        for h, m, label in test_hours:
-            dep_s = h * 3600 + m * 60
-            pred = self.predict_leg_travel_time(
-                route_id=route_id,
-                shape_id=shape_id,
-                start_dist_m=start_dist_m,
-                end_dist_m=end_dist_m,
-                departure_time_seconds=dep_s,
-                is_weekend=is_weekend
-            )
-            results.append({
-                "time_label": label,
-                "hour": h,
-                "minute": m,
-                "duration_seconds": pred["total_travel_time_s"],
-                "duration_minutes": round(pred["total_travel_time_s"] / 60.0, 1),
-                "speed_kmh": round((pred["total_distance_m"] / max(pred["total_travel_time_s"], 1.0)) * 3.6, 1),
-                "lower_bound_minutes": round(pred["lower_bound_s"] / 60.0, 1),
-                "upper_bound_minutes": round(pred["upper_bound_s"] / 60.0, 1),
-                "confidence": pred["confidence"],
-                "provenance": pred["provenance"]
+    def compare_departure_times(self, route_id: str, shape_id: str, start_dist_m: float, end_dist_m: float,
+                                is_weekend: int = 0) -> List[Dict[str, Any]]:
+        out = []
+        for h in range(24):
+            dep = h * 3600 + 30 * 60
+            p = self.predict_leg_travel_time(route_id, shape_id, start_dist_m, end_dist_m, dep, is_weekend)
+            tt = p["total_travel_time_s"]; dist = max(p["total_distance_m"], 1.0)
+            out.append({
+                "hour": h, "time_label": f"{h:02d}:30",
+                "duration_seconds": tt, "duration_minutes": round(tt / 60.0, 1),
+                "speed_kmh": round(dist / max(tt, 1.0) * 3.6, 1),
+                "lower_bound_minutes": round(p["lower_bound_s"] / 60.0, 1),
+                "upper_bound_minutes": round(p["upper_bound_s"] / 60.0, 1),
+                "confidence": p["confidence"], "provenance": p["provenance"],
+                "congestion_index": p["congestion_index"],
             })
+        return out
 
-        return results
+    def congestion(self, hour: int, is_weekend: int, bbox=None) -> Dict[str, Any]:
+        if not self.ensure_loaded():
+            return {"status": "UNTRAINED", "features": [], "fields": [], "summary": {}}
+        data = self.model.congestion(hour, is_weekend, bbox=bbox)
+        data["status"] = "OK"
+        data["cells_measured_pct"] = self.model.meta.get("cells_measured_pct")
+        return data
 
 
-# Global singleton prediction service
 prediction_service = TravelTimePredictionService()

@@ -8,7 +8,7 @@ from pathlib import Path
 
 def extract_create_bus_svg_js():
     """Extracts createBusSvg function definition from app.js for structural validation."""
-    app_js = Path("E:/Pulse/frontend/static/js/app.js").read_text(encoding="utf-8")
+    app_js = (Path(__file__).resolve().parents[2] / "frontend" / "static" / "js" / "app.js").read_text(encoding="utf-8")
     match = re.search(r"function createBusSvg\(freshnessState, bearing\)\s*\{(.*?)\n\}", app_js, re.DOTALL)
     assert match is not None, "createBusSvg function not found in app.js"
     return match.group(1)
@@ -54,4 +54,5 @@ def test_bus_svg_freshness_states_and_bearing():
     assert "#10B981" in fn_body  # FRESH
     assert "#F59E0B" in fn_body  # AGING
     assert "#EF4444" in fn_body  # STALE
-    assert "transform: rotate(${rotation}deg)" in fn_body
+    # The globe billboard is rotated to the bearing; the SVG records it for debugging.
+    assert 'data-rotation="${rotation}"' in fn_body

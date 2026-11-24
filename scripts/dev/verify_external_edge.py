@@ -10,7 +10,7 @@ Fully exercises:
 - Test E: Live SVG Buses (Zoom 15/16, SVG DOM verification, wheels, headlights, freshness classes, popup)
 - Test F: Browser Refresh & Hard Refresh (Persistence, migration, no reversion to legacy dark map)
 
-Saves evidence screenshots to E:/Pulse/docs/evidence/external-edge/
+Saves evidence screenshots to docs/evidence/external-edge/
 """
 import sys
 import time
@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-EVIDENCE_DIR = Path("E:/Pulse/docs/evidence/external-edge")
+EVIDENCE_DIR = Path("docs/evidence/external-edge")
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -378,6 +378,6 @@ def run_edge_acceptance():
 
 if __name__ == "__main__":
     res = run_edge_acceptance()
-    out_file = Path("E:/Pulse/docs/evidence/external-edge/acceptance_results.json")
+    out_file = Path("docs/evidence/external-edge/acceptance_results.json")
     out_file.write_text(json.dumps(res, indent=2), encoding="utf-8")
     print(f"\nSaved test results to {out_file}")

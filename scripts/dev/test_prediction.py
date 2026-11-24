@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, "E:/Pulse")
+sys.path.insert(0, ".")
 from app.services.prediction_service import prediction_service
 
 def test_prediction():

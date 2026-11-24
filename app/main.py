@@ -2,6 +2,7 @@
 PULSE — Predictive Urban Mobility & Live Spatiotemporal Engine
 FastAPI Production Application Entrypoint (app/main.py)
 """
+import json
 import time
 import asyncio
 from contextlib import asynccontextmanager
@@ -37,7 +38,10 @@ async def lifespan(app: FastAPI):
     # 1. Startup: Enforce storage invariants (ADR 001)
     configure_process_environment()
     diag = run_storage_diagnostics()
-    logger.info(f"PULSE {settings.APP_VERSION} starting up. Storage check: {diag['status']} ({diag['free_gb']} GB free on E:)")
+    logger.info(f"PULSE {settings.APP_VERSION} starting up. Storage check: {diag['status']} ({diag['free_gb']} GB free on {diag['drive']})")
+    from app.services.prediction_service import prediction_service
+    if prediction_service.ensure_loaded():
+        logger.info(f"Traffic model loaded ({prediction_service.model.meta.get('cells_measured_pct')}% measured cells).")
     
     # Launch live GTFS-RT feed poller in background if enabled
     poll_task = None
@@ -75,6 +79,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def revalidate_static(request: Request, call_next):
+    """Make browsers revalidate UI assets so a redeploy is picked up immediately."""
+    response = await call_next(request)
+    if request.url.path.startswith("/static/") or request.url.path == "/":
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 # Standardized Error Handlers (Eliminates unexpected HTML / text errors)
@@ -139,27 +152,27 @@ app.include_router(validation_router, prefix="/api/v1")
 app.include_router(places_router, prefix="/api/v1")
 
 # Mount Frontend Static Files if directory exists
-static_path = Path("E:/Pulse/frontend/static")
+static_path = settings.WORKSPACE_ROOT / "frontend" / "static"
 static_path.mkdir(parents=True, exist_ok=True)
-app.mount("/static", StaticFiles(directory="E:/Pulse/frontend/static"), name="static")
+app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
 
 @app.get("/", tags=["UI"], response_class=HTMLResponse)
 def index_page():
     """Serves the PULSE Interactive Web Application with injected configuration."""
-    index_file = Path("E:/Pulse/frontend/index.html")
+    index_file = settings.WORKSPACE_ROOT / "frontend" / "index.html"
     if index_file.exists():
         html = index_file.read_text(encoding="utf-8")
-        carto_key = settings.CARTO_API_KEY or ""
-        maptiler_key = settings.MAPTILER_API_KEY or ""
-        config_script = (
-            f"<script>window.PULSE_CONFIG = {{"
-            f" cartoApiKey: '{carto_key}',"
-            f" maptilerApiKey: '{maptiler_key}',"
-            f" geoapifyEnabled: {'true' if settings.GEOAPIFY_API_KEY else 'false'},"
-            f" liveEnabled: {'true' if settings.LIVE_FEED_ENABLED else 'false'}"
-            f" }};</script>"
-        )
+        client_cfg = {
+            "cartoApiKey": settings.CARTO_API_KEY or "",
+            "maptilerApiKey": settings.MAPTILER_API_KEY or "",
+            "googleMapsApiKey": settings.GOOGLE_MAPS_API_KEY or "",
+            "geoapifyEnabled": bool(settings.GEOAPIFY_API_KEY),
+            "liveEnabled": bool(settings.LIVE_FEED_ENABLED and settings.OTD_API_KEY),
+            "pollIntervalSeconds": settings.LIVE_POLL_INTERVAL_SECONDS,
+        }
+        cfg_json = json.dumps(client_cfg).replace("</", "<\\/")
+        config_script = f"<script>window.PULSE_CONFIG = {cfg_json};</script>"
         if "</head>" in html:
             html = html.replace("</head>", f"  {config_script}\n</head>")
         return HTMLResponse(content=html)
@@ -172,6 +185,7 @@ def get_public_config() -> Dict[str, Any]:
     return {
         "carto_api_key": settings.CARTO_API_KEY,
         "maptiler_api_key": settings.MAPTILER_API_KEY,
+        "google_3d_tiles_enabled": bool(settings.GOOGLE_MAPS_API_KEY),
         "geoapify_enabled": bool(settings.GEOAPIFY_API_KEY),
         "live_feed_enabled": settings.LIVE_FEED_ENABLED,
         "poll_interval_seconds": settings.LIVE_POLL_INTERVAL_SECONDS,
@@ -244,6 +258,11 @@ def get_readiness() -> JSONResponse:
         )
 
 
+def _model_status() -> Dict[str, Any]:
+    from app.services.prediction_service import prediction_service
+    return prediction_service.status()
+
+
 @app.get("/api/v1/system/status", tags=["System"])
 def get_system_status() -> Dict[str, Any]:
     """Comprehensive system status across storage, datasets, models, and live feeds."""
@@ -286,6 +305,7 @@ def get_system_status() -> Dict[str, Any]:
                 "provenance": "STATIC_GTFS (Immutable Raw)"
             }
         },
+        "traffic_model": _model_status(),
         "live_feed": {
             "endpoint": settings.OTD_VEHICLE_POSITIONS_URL,
             "enabled": settings.LIVE_FEED_ENABLED,

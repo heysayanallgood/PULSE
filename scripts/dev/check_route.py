@@ -1,5 +1,5 @@
 import duckdb
-con = duckdb.connect('E:/Pulse/data/database/gtfs.duckdb', read_only=True)
+con = duckdb.connect('data/database/gtfs.duckdb', read_only=True)
 res = con.execute("SELECT route_id, route_short_name, route_long_name FROM routes WHERE route_short_name ILIKE '%425%' LIMIT 5;").fetchall()
 print("Matches:", res)
 if res:

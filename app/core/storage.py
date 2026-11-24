@@ -1,6 +1,6 @@
 """
 PULSE Storage Diagnostic & Workspace Safeguards (ADR 001)
-Ensures host OS C: drive is protected and E: drive workspace is validated.
+Validates that required data directories exist and are writable.
 """
 import os
 import shutil
@@ -8,21 +8,23 @@ import sys
 from pathlib import Path
 from typing import Dict, Any
 
+from app.core.config import settings
+
 REQUIRED_DIRS = [
-    Path("E:/Pulse/data/cache/pip"),
-    Path("E:/Pulse/data/cache/temp"),
-    Path("E:/Pulse/data/cache/duckdb"),
-    Path("E:/Pulse/data/raw"),
-    Path("E:/Pulse/data/staging"),
-    Path("E:/Pulse/data/processed"),
-    Path("E:/Pulse/data/database"),
-    Path("E:/Pulse/data/models"),
-    Path("E:/Pulse/data/manifests"),
-    Path("E:/Pulse/data/validation"),
-    Path("E:/Pulse/logs"),
+    settings.CACHE_ROOT / "pip",
+    settings.CACHE_ROOT / "temp",
+    settings.CACHE_ROOT / "duckdb",
+    settings.RAW_DATA_ROOT,
+    settings.STAGING_DATA_ROOT,
+    settings.PROCESSED_DATA_ROOT,
+    settings.DATABASE_ROOT,
+    settings.MODEL_ROOT,
+    settings.MANIFEST_ROOT,
+    settings.DATA_ROOT / "validation",
+    settings.LOG_ROOT,
 ]
 
-MIN_FREE_GB_THRESHOLD = 20.0  # Alert threshold for E: drive
+MIN_FREE_GB_THRESHOLD = 20.0  # Alert threshold for workspace drive
 
 
 class StorageSafetyError(RuntimeError):
@@ -32,19 +34,20 @@ class StorageSafetyError(RuntimeError):
 
 def run_storage_diagnostics() -> Dict[str, Any]:
     """
-    Validates E: workspace availability, free disk space, and directory writability.
+    Validates workspace availability, free disk space, and directory writability.
     Enforces ADR 001 isolation invariants.
     """
-    workspace = Path("E:/Pulse")
+    workspace = settings.WORKSPACE_ROOT.resolve()
     if not workspace.exists():
-        raise StorageSafetyError("CRITICAL: E:/Pulse workspace not accessible. Aborting to protect C: drive.")
+        raise StorageSafetyError(f"CRITICAL: Workspace {workspace} not accessible.")
 
-    total, used, free = shutil.disk_usage("E:/")
+    drive = workspace.anchor  # e.g. "E:\\" or "D:\\"
+    total, used, free = shutil.disk_usage(drive)
     free_gb = free / (1024 ** 3)
     total_gb = total / (1024 ** 3)
 
     if free_gb < MIN_FREE_GB_THRESHOLD:
-        raise StorageSafetyError(f"CRITICAL: Low disk space on E: ({free_gb:.2f} GB free). Threshold is {MIN_FREE_GB_THRESHOLD} GB.")
+        raise StorageSafetyError(f"CRITICAL: Low disk space on {drive} ({free_gb:.2f} GB free). Threshold is {MIN_FREE_GB_THRESHOLD} GB.")
 
     # Ensure all required directories exist and are writable
     created_or_verified = []
@@ -65,8 +68,8 @@ def run_storage_diagnostics() -> Dict[str, Any]:
     pip_cache = os.environ.get("PIP_CACHE_DIR", "")
 
     return {
-        "workspace": str(workspace.resolve()),
-        "drive": "E:",
+        "workspace": str(workspace),
+        "drive": drive,
         "total_gb": round(total_gb, 2),
         "free_gb": round(free_gb, 2),
         "verified_directories": len(created_or_verified),
@@ -78,10 +81,12 @@ def run_storage_diagnostics() -> Dict[str, Any]:
 
 
 def configure_process_environment():
-    """Sets TEMP, TMP, and PIP_CACHE_DIR to E: for the current Python process."""
-    os.environ["TEMP"] = "E:/Pulse/data/cache/temp"
-    os.environ["TMP"] = "E:/Pulse/data/cache/temp"
-    os.environ["PIP_CACHE_DIR"] = "E:/Pulse/data/cache/pip"
+    """Sets TEMP, TMP, and PIP_CACHE_DIR to the workspace cache for the current Python process."""
+    cache = str((settings.CACHE_ROOT / "temp").resolve())
+    pip = str((settings.CACHE_ROOT / "pip").resolve())
+    os.environ["TEMP"] = cache
+    os.environ["TMP"] = cache
+    os.environ["PIP_CACHE_DIR"] = pip
 
 
 if __name__ == "__main__":
@@ -90,3 +95,4 @@ if __name__ == "__main__":
     print("Storage Diagnostic Report:")
     for k, v in diag.items():
         print(f"  {k}: {v}")
+

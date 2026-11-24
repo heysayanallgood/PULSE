@@ -15,8 +15,35 @@ from app.core.logging import logger
 from app.data.gtfs.repository import gtfs_repo
 from app.routing.walking import calculate_walking_leg
 from app.services.prediction_service import prediction_service
+from app.services.headway_service import headway_service
 
-GTFS_DB_PATH = Path("E:/Pulse/data/database/gtfs.duckdb")
+GTFS_DB_PATH = settings.DATABASE_ROOT / "gtfs.duckdb"
+
+_CONF_RANK = {"NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3}
+
+
+class _LazyGeometry(dict):
+    """Arguments for gtfs_repo.get_clipped_shape_coordinates, resolved only for
+    the options that are actually returned (clipping is the slow part)."""
+
+
+def resolve_geometries(options: List["RaptorJourneyOption"]) -> None:
+    for opt in options:
+        for leg in opt.legs:
+            g = leg.get("geometry")
+            if isinstance(g, _LazyGeometry):
+                leg["geometry"] = gtfs_repo.get_clipped_shape_coordinates(**g)
+            heat = leg.pop("_heat", None)
+            if heat and heat[0]:
+                try:
+                    leg["heat"] = prediction_service.leg_heat(*heat)
+                except Exception as exc:  # never fail a journey over the overlay
+                    logger.warning(f"leg heat failed: {exc}")
+                    leg["heat"] = []
+
+
+def _worse_confidence(a: str, b: str) -> str:
+    return a if _CONF_RANK.get(a, 0) <= _CONF_RANK.get(b, 0) else b
 
 
 class RaptorJourneyOption:
@@ -82,11 +109,24 @@ class RaptorRouter:
 
     def __init__(self):
         self._con = duckdb.connect(str(GTFS_DB_PATH), read_only=True)
-        self._con.execute("SET temp_directory = 'E:/Pulse/data/cache/duckdb';")
+        cache_dir = settings.CACHE_ROOT / "duckdb"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self._con.execute(f"SET temp_directory = '{cache_dir.as_posix()}';")
 
     @property
     def con(self):
         return self._con.cursor()
+
+    @staticmethod
+    def _stop_positions(shape_id, from_stop_id, to_stop_id) -> Optional[Tuple[float, float]]:
+        """Distances along the shape of the boarding and alighting stops."""
+        if not shape_id:
+            return None
+        a = prediction_service.stop_position(shape_id, from_stop_id)
+        b = prediction_service.stop_position(shape_id, to_stop_id)
+        if a is None or b is None or b - a < 50:
+            return None
+        return a, b
 
     def _parse_time_str(self, time_str: str) -> int:
         parts = [int(p) for p in time_str.split(":")]
@@ -114,8 +154,8 @@ class RaptorRouter:
             return []
 
         # Find routes that visit both an origin stop and a destination stop with correct sequence
-        placeholders_o = ", ".join([f"'{x}'" for x in o_ids])
-        placeholders_d = ", ".join([f"'{x}'" for x in d_ids])
+        placeholders_o = ", ".join(["?"] * len(o_ids))
+        placeholders_d = ", ".join(["?"] * len(d_ids))
 
         query = f"""
             SELECT 
@@ -139,9 +179,11 @@ class RaptorRouter:
             WHERE st1.stop_id IN ({placeholders_o})
               AND st2.stop_id IN ({placeholders_d})
               AND st1.stop_sequence < st2.stop_sequence
-            LIMIT 50;
+            QUALIFY row_number() OVER (PARTITION BY t.shape_id, st1.stop_id, st2.stop_id ORDER BY t.trip_id) = 1
+            ORDER BY st2.stop_sequence - st1.stop_sequence
+            LIMIT 80;
         """
-        matches = self.con.execute(query).fetchdf()
+        matches = self.con.execute(query, [str(x) for x in o_ids] + [str(x) for x in d_ids]).fetchdf()
         if len(matches) == 0:
             return []
 
@@ -159,16 +201,25 @@ class RaptorRouter:
             # Boarding time is at earliest departure_time_s + walk_first duration
             earliest_board = departure_time_s + walk_first["duration_s"]
             sched_dep_s = self._parse_time_str(row["sched_dep"])
-            
-            # Wait time before bus arrives
-            wait_s = max(180, (sched_dep_s - earliest_board) % 1800)  # Typical Delhi 15-30m headway
+
+            # Wait time: use observed headway data, not schedule modulo arithmetic
+            ist_epoch_approx = int(departure_time_s)   # already in seconds-of-day
+            bucket = (ist_epoch_approx // 900) % 96
+            hw = headway_service.expected_wait_s(
+                stop_id=row["origin_stop_id"],
+                route_id=str(row["route_id"]),
+                bucket=bucket,
+                is_weekend=is_weekend,
+            )
+            wait_s = max(60, int(hw["wait_s"]))
+            wait_source = hw["source_level"]
 
             actual_board_s = earliest_board + wait_s
 
             # Predict in-vehicle travel time using PULSE Model!
-            if row["origin_dist"] is not None and row["dest_dist"] is not None and float(row["dest_dist"]) > float(row["origin_dist"]):
-                d_start = float(row["origin_dist"])
-                d_end = float(row["dest_dist"])
+            pos = self._stop_positions(row["shape_id"], row["origin_stop_id"], row["dest_stop_id"])
+            if pos:
+                d_start, d_end = pos
             else:
                 # Calculate metric distance between stops using UTM 43N
                 from pyproj import Transformer
@@ -210,7 +261,7 @@ class RaptorRouter:
                     "confidence": "HIGH"
                 })
 
-            bus_geom = gtfs_repo.get_clipped_shape_coordinates(
+            bus_geom = _LazyGeometry(
                 shape_id=row["shape_id"],
                 board_lat=float(orig_stop["stop_lat"]),
                 board_lon=float(orig_stop["stop_lon"]),
@@ -232,6 +283,7 @@ class RaptorRouter:
                 "alighting_lon": float(dest_stop["stop_lon"]),
                 "shape_id": row["shape_id"],
                 "geometry": bus_geom,
+                "_heat": (row["shape_id"] if pos else None, d_start, d_end, actual_board_s, is_weekend),
                 "stops_traversed": int(row["dest_seq"] - row["origin_seq"]),
                 "distance_km": round(pred["total_distance_m"] / 1000.0, 2),
                 "departure_time": self._format_time_s(actual_board_s),
@@ -239,7 +291,11 @@ class RaptorRouter:
                 "lower_bound_minutes": round(pred["lower_bound_s"] / 60.0, 1),
                 "upper_bound_minutes": round(pred["upper_bound_s"] / 60.0, 1),
                 "confidence": pred["confidence"],
-                "provenance": pred["provenance"]
+                "provenance": pred["provenance"],
+                "measured_share": pred.get("measured_share"),
+                "congestion_index": pred.get("congestion_index"),
+                "expected_wait_minutes": round(wait_s / 60.0, 1),
+                "wait_source": wait_source,
             })
 
             if walk_final["duration_s"] > 0:
@@ -284,8 +340,8 @@ class RaptorRouter:
         o_ids = [s["stop_id"] for s in origin_stops[:3]]
         d_ids = [s["stop_id"] for s in destination_stops[:3]]
 
-        placeholders_o = ", ".join([f"'{x}'" for x in o_ids])
-        placeholders_d = ", ".join([f"'{x}'" for x in d_ids])
+        placeholders_o = ", ".join(["?"] * len(o_ids))
+        placeholders_d = ", ".join(["?"] * len(d_ids))
 
         # High-performance CTE-based 1-transfer search (prevents OOM on massive interchange hubs)
         query = f"""
@@ -323,7 +379,7 @@ class RaptorRouter:
             WHERE ot.route_id != dt.route_id
             LIMIT 20;
         """
-        matches = self.con.execute(query).fetchdf()
+        matches = self.con.execute(query, [str(x) for x in o_ids] + [str(x) for x in d_ids]).fetchdf()
         if len(matches) == 0:
             return []
 
@@ -341,15 +397,23 @@ class RaptorRouter:
 
             # Leg 1: Board bus 1
             earliest_board1 = departure_time_s + walk_first["duration_s"]
-            wait1_s = 240  # 4 min wait
+            # Use observed headway for first leg wait
+            bucket1 = (int(departure_time_s) // 900) % 96
+            hw1 = headway_service.expected_wait_s(
+                stop_id=row["orig_id"],
+                route_id=str(row["r1_id"]),
+                bucket=bucket1,
+                is_weekend=is_weekend,
+            )
+            wait1_s = max(60, int(hw1["wait_s"]))
             board1_s = earliest_board1 + wait1_s
 
             # Leg 1 distance
             from pyproj import Transformer
             t_proj = Transformer.from_crs("EPSG:4326", "EPSG:32643", always_xy=True)
-            if row["orig_dist"] is not None and row["xfer1_dist"] is not None and float(row["xfer1_dist"]) > float(row["orig_dist"]):
-                d1_start = float(row["orig_dist"])
-                d1_end = float(row["xfer1_dist"])
+            pos1 = self._stop_positions(row["shape1"], row["orig_id"], row["xfer_id"])
+            if pos1:
+                d1_start, d1_end = pos1
             else:
                 o1_x, o1_y = t_proj.transform(orig_stop["stop_lon"], orig_stop["stop_lat"])
                 x1_x, x1_y = t_proj.transform(xfer_stop_data.get("stop_lon", orig_stop["stop_lon"]), xfer_stop_data.get("stop_lat", orig_stop["stop_lat"]))
@@ -369,13 +433,22 @@ class RaptorRouter:
 
             # Transfer Buffer (Correction 6: 3 minutes configurable baseline)
             xfer_buffer_s = settings.MIN_TRANSFER_BUFFER_SECONDS
-            wait2_s = 300  # 5 min wait for connection
+            # Use observed headway for second leg wait
+            arr_xfer_epoch_s = int(arr_xfer_s)
+            bucket2 = (arr_xfer_epoch_s // 900) % 96
+            hw2 = headway_service.expected_wait_s(
+                stop_id=row["xfer_id"],
+                route_id=str(row["r2_id"]),
+                bucket=bucket2,
+                is_weekend=is_weekend,
+            )
+            wait2_s = max(60, int(hw2["wait_s"]))
             board2_s = arr_xfer_s + xfer_buffer_s + wait2_s
 
             # Leg 2 distance
-            if row["xfer2_dist"] is not None and row["dest_dist"] is not None and float(row["dest_dist"]) > float(row["xfer2_dist"]):
-                d2_start = float(row["xfer2_dist"])
-                d2_end = float(row["dest_dist"])
+            pos2 = self._stop_positions(row["shape2"], row["xfer_id"], row["dest_id"])
+            if pos2:
+                d2_start, d2_end = pos2
             else:
                 d2_x, d2_y = t_proj.transform(dest_stop["stop_lon"], dest_stop["stop_lat"])
                 x2_x, x2_y = t_proj.transform(xfer_stop_data.get("stop_lon", dest_stop["stop_lon"]), xfer_stop_data.get("stop_lat", dest_stop["stop_lat"]))
@@ -413,7 +486,7 @@ class RaptorRouter:
                     "confidence": "HIGH"
                 })
 
-            bus1_geom = gtfs_repo.get_clipped_shape_coordinates(
+            bus1_geom = _LazyGeometry(
                 shape_id=row["shape1"],
                 board_lat=float(orig_stop["stop_lat"]),
                 board_lon=float(orig_stop["stop_lon"]),
@@ -435,12 +508,17 @@ class RaptorRouter:
                 "alighting_lon": float(xfer_stop_data.get("stop_lon", orig_stop["stop_lon"])),
                 "shape_id": row["shape1"],
                 "geometry": bus1_geom,
+                "_heat": (row["shape1"] if pos1 else None, d1_start, d1_end, board1_s, is_weekend),
                 "stops_traversed": int(row["xfer1_seq"] - row["orig_seq"]),
                 "distance_km": round(pred1["total_distance_m"] / 1000.0, 2),
                 "departure_time": self._format_time_s(board1_s),
                 "predicted_duration_minutes": round(tt1_s / 60.0, 1),
                 "confidence": pred1["confidence"],
-                "provenance": pred1["provenance"]
+                "provenance": pred1["provenance"],
+                "measured_share": pred1.get("measured_share"),
+                "congestion_index": pred1.get("congestion_index"),
+                "expected_wait_minutes": round(wait1_s / 60.0, 1),
+                "wait_source": hw1["source_level"]
             })
 
             legs.append({
@@ -451,10 +529,11 @@ class RaptorRouter:
                 "transfer_lon": float(xfer_stop_data.get("stop_lon", orig_stop["stop_lon"])),
                 "buffer_minutes": round(xfer_buffer_s / 60.0, 1),
                 "expected_wait_minutes": round(wait2_s / 60.0, 1),
+                "wait_source": hw2["source_level"],
                 "instruction": f"Change buses at {xfer_stop_data['stop_name']} to Route {row['r2_name']}"
             })
 
-            bus2_geom = gtfs_repo.get_clipped_shape_coordinates(
+            bus2_geom = _LazyGeometry(
                 shape_id=row["shape2"],
                 board_lat=float(xfer_stop_data.get("stop_lat", dest_stop["stop_lat"])),
                 board_lon=float(xfer_stop_data.get("stop_lon", dest_stop["stop_lon"])),
@@ -476,12 +555,15 @@ class RaptorRouter:
                 "alighting_lon": float(dest_stop["stop_lon"]),
                 "shape_id": row["shape2"],
                 "geometry": bus2_geom,
+                "_heat": (row["shape2"] if pos2 else None, d2_start, d2_end, board2_s, is_weekend),
                 "stops_traversed": int(row["dest_seq"] - row["xfer2_seq"]),
                 "distance_km": round(pred2["total_distance_m"] / 1000.0, 2),
                 "departure_time": self._format_time_s(board2_s),
                 "predicted_duration_minutes": round(tt2_s / 60.0, 1),
                 "confidence": pred2["confidence"],
-                "provenance": pred2["provenance"]
+                "provenance": pred2["provenance"],
+                "measured_share": pred2.get("measured_share"),
+                "congestion_index": pred2.get("congestion_index")
             })
 
             if walk_final["duration_s"] > 0:
@@ -506,8 +588,8 @@ class RaptorRouter:
                 in_vehicle_duration_s=total_in_vehicle_s,
                 waiting_duration_s=total_wait_s,
                 legs=legs,
-                confidence="MEDIUM",
-                provenance="HISTORICAL",
+                confidence=_worse_confidence(pred1["confidence"], pred2["confidence"]),
+                provenance=pred1["provenance"] if pred1["provenance"] == pred2["provenance"] else "MIXED",
                 lower_bound_s=int(pred1["lower_bound_s"] + pred2["lower_bound_s"]) + total_walk_s + total_wait_s,
                 upper_bound_s=int(pred1["upper_bound_s"] + pred2["upper_bound_s"]) + total_walk_s + total_wait_s
             )
@@ -516,22 +598,29 @@ class RaptorRouter:
         return results
 
     def filter_pareto_optimal(self, candidates: List[RaptorJourneyOption], max_options: int = 3) -> List[RaptorJourneyOption]:
-        """Applies Pareto dominance filtering across arrival time, transfers, and walking time."""
-        pareto = []
-        for cand in candidates:
-            is_dominated = False
-            for other in candidates:
-                if other is not cand and other.dominates(cand):
-                    is_dominated = True
-                    break
-            if not is_dominated:
-                # Avoid duplicate identical arrival and transfer counts
-                if not any(p.arrival_time_s == cand.arrival_time_s and p.transfers == cand.transfers for p in pareto):
-                    pareto.append(cand)
+        """Pareto set over (arrival, transfers, walking), then filled with the next
+        fastest options that use a different set of routes, so riders see real
+        alternatives instead of the same bus at three departure guesses."""
+        def signature(opt: RaptorJourneyOption) -> Tuple[str, ...]:
+            return tuple(str(l.get("route_id")) for l in opt.legs if l.get("type") == "BUS")
 
-        # Sort by total duration
-        pareto.sort(key=lambda x: x.total_duration_s)
-        return pareto[:max_options]
+        ordered = sorted(candidates, key=lambda x: (x.arrival_time_s, x.transfers, x.walking_duration_s))
+        chosen: List[RaptorJourneyOption] = []
+        seen: Set[Tuple[str, ...]] = set()
+        pareto = [c for c in ordered if not any(o is not c and o.dominates(c) for o in ordered)]
+        for pool in (pareto, ordered):
+            for cand in pool:
+                sig = signature(cand)
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                chosen.append(cand)
+                if len(chosen) >= max_options:
+                    break
+            if len(chosen) >= max_options:
+                break
+        chosen.sort(key=lambda x: x.total_duration_s)
+        return chosen
 
 
 # Global singleton router

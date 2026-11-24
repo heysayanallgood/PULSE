@@ -54,18 +54,24 @@ def test_analytics_time_comparison_api():
     assert response.status_code == 200
     data = response.json()
     assert len(data) >= 5
-    # Morning peak must have longer duration than late night!
-    am_peak = next(c for c in data if c["hour"] == 8)
-    night = next(c for c in data if c["hour"] == 23)
-    assert am_peak["duration_minutes"] > night["duration_minutes"]
+    assert len(data) == 24
+    # Time of day must matter: the evening peak (17-20h) of this corridor is
+    # slower than its early morning (05-06h). Values come from the trained model.
+    by_hour = {c["hour"]: c["duration_minutes"] for c in data}
+    if all(c["provenance"] != "UNTRAINED" for c in data):
+        assert max(by_hour[h] for h in (17, 18, 19)) > min(by_hour[h] for h in (5, 6)) * 1.2
 
 def test_validation_summary_api():
     response = client.get("/api/v1/validation/summary")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "VALIDATED"
-    assert data["metrics"]["mae_pulse_minutes"] < data["metrics"]["mae_timetable_minutes"]
-    assert len(data["benchmarks"]) >= 5
+    # Results are computed by scripts/build_traffic_model.py evaluate; never hand-typed.
+    assert data["status"] in ("OK", "NOT_RUN")
+    if data["status"] == "OK":
+        pulse = data["overall"]["pulse"]
+        assert pulse["n"] > 0 and pulse["mae_min"] >= 0
+        assert data["method"]["test_days"] and data["method"]["train_days"]
+        assert not set(data["method"]["test_days"]) & set(data["method"]["train_days"])
 
 def test_vehicles_api():
     response = client.get("/api/v1/vehicles")

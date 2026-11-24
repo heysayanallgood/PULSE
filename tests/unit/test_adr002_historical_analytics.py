@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 def test_sqlite_readonly_enforcement():
-    db_path = "E:/Pulse/delhi-dtc-bus-gtfs-rt-2026-10/bus_movements_2026_10_01.db"
+    db_path = "delhi-dtc-bus-gtfs-rt-2026-10/bus_movements_2026_10_01.db"
     assert os.path.exists(db_path), f"File {db_path} must exist"
     
     # Connect with read-only URI
@@ -30,7 +30,7 @@ def test_sqlite_readonly_enforcement():
 
 def test_duckdb_parquet_dual_distribution():
     con = duckdb.connect()
-    con.execute("SET temp_directory = 'E:/Pulse/data/cache/duckdb';")
+    con.execute("SET temp_directory = 'data/cache/duckdb';")
     
     con.execute("""
         CREATE TABLE segment_traversals (
@@ -73,7 +73,7 @@ def test_duckdb_parquet_dual_distribution():
     assert row["travel_time_median_s"] == 40.0
     assert row["travel_time_p10_s"] < row["travel_time_median_s"] < row["travel_time_p90_s"]
     
-    out_dir = Path("E:/Pulse/data/processed/test_parquet")
+    out_dir = Path("data/processed/test_parquet")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "test_summary.parquet"
     

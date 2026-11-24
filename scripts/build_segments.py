@@ -10,14 +10,14 @@ from pyproj import Transformer
 from shapely.geometry import LineString
 from pathlib import Path
 
-DB_PATH = Path("E:/Pulse/data/database/gtfs.duckdb")
+DB_PATH = Path("data/database/gtfs.duckdb")
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32643", always_xy=True)
 
 
 def build_route_segments(target_length_m: float = 400.0):
     print("=== Building Metric Route Segments (ADR 003) ===")
     con = duckdb.connect(str(DB_PATH))
-    con.execute("SET temp_directory = 'E:/Pulse/data/cache/duckdb';")
+    con.execute("SET temp_directory = 'data/cache/duckdb';")
 
     # Drop previous segments table if exists
     con.execute("DROP TABLE IF EXISTS route_segments;")

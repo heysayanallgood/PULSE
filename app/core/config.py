@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file="E:/Pulse/.env",
+        env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore"
     )
@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     CARTO_API_KEY: Optional[str] = Field(default=None, description="Basemaps API key for CARTO Positron/Voyager tiles")
     GEOAPIFY_API_KEY: Optional[str] = Field(default=None, description="Optional API key for Geoapify address autocomplete")
     MAPTILER_API_KEY: Optional[str] = Field(default=None, description="Optional API key for MapTiler Satellite basemap")
+    GOOGLE_MAPS_API_KEY: Optional[str] = Field(default=None, description="Browser key for Google Photorealistic 3D Tiles (globe) and the Routes API comparison")
 
     # Real-Time Service Settings
     LIVE_FEED_ENABLED: bool = False
@@ -39,20 +40,22 @@ class Settings(BaseSettings):
     LIVE_DEGRADED_TOLERANCE_SECONDS: int = 120
 
     # Storage Paths (ADR 001)
-    WORKSPACE_ROOT: Path = Path("E:/Pulse")
-    DATA_ROOT: Path = Path("E:/Pulse/data")
-    RAW_DATA_ROOT: Path = Path("E:/Pulse/data/raw")
-    STAGING_DATA_ROOT: Path = Path("E:/Pulse/data/staging")
-    PROCESSED_DATA_ROOT: Path = Path("E:/Pulse/data/processed")
-    DATABASE_ROOT: Path = Path("E:/Pulse/data/database")
-    MODEL_ROOT: Path = Path("E:/Pulse/data/models")
-    CACHE_ROOT: Path = Path("E:/Pulse/data/cache")
-    MANIFEST_ROOT: Path = Path("E:/Pulse/data/manifests")
-    LOG_ROOT: Path = Path("E:/Pulse/logs")
+    # Override any of these via environment variables or .env file.
+    # Defaults resolve relative to the current working directory (project root).
+    WORKSPACE_ROOT: Path = Path(".")
+    DATA_ROOT: Path = Path("data")
+    RAW_DATA_ROOT: Path = Path("data/raw")
+    STAGING_DATA_ROOT: Path = Path("data/staging")
+    PROCESSED_DATA_ROOT: Path = Path("data/processed")
+    DATABASE_ROOT: Path = Path("data/database")
+    MODEL_ROOT: Path = Path("data/models")
+    CACHE_ROOT: Path = Path("data/cache")
+    MANIFEST_ROOT: Path = Path("data/manifests")
+    LOG_ROOT: Path = Path("logs")
 
     # Raw Source Paths (ADR 006)
-    HISTORICAL_SQLITE_DIR: Path = Path("E:/Pulse/delhi-dtc-bus-gtfs-rt-2026-10")
-    STATIC_GTFS_DIR: Path = Path("E:/Pulse/delhi_buses_static_gtfs_v1")
+    HISTORICAL_SQLITE_DIR: Path = Path("delhi-dtc-bus-gtfs-rt-2026-10")
+    STATIC_GTFS_DIR: Path = Path("delhi_buses_static_gtfs_v1")
 
     # Timezone & Geospatial Settings (ADR 003)
     TIMEZONE: str = "Asia/Kolkata"

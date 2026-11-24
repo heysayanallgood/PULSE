@@ -1,1234 +1,1245 @@
 /**
- * PULSE — Interactive Client Application (frontend/static/js/app.js)
- * Delhi DTC Bus Spatiotemporal Engine & Multi-Criteria Journey Planner
- * Upgraded with Light & Satellite Maps, Rapido-style 2D Bus SVGs,
- * Marker Clustering, Debounced Delhi Stop Search & Real GTFS Shape Polylines.
+ * PULSE · Globe client (frontend/static/js/app.js)
+ *
+ * Modes (bottom dock):
+ *   journey     plan a trip; legs are drawn in 3D on the globe
+ *   live        GTFS-RT buses as heading-rotated billboards
+ *   congestion  per-stretch congestion index by hour (traffic model layer)
+ *   validation  measured accuracy vs held-out trips, timetable, Google
+ *   system      engine + dataset status
  */
+/* global Cesium */
+import { PulseGlobe } from './globe.js';
 
-const PULSE_BUILD_VERSION = '20261122-v2.1.0';
+const PULSE_BUILD_VERSION = '20261123-v3.0.0-globe';
 window.PULSE_BUILD_VERSION = PULSE_BUILD_VERSION;
 
-// Application State
+const CFG = window.PULSE_CONFIG || {};
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
 const state = {
-  currentView: 'journey',
-  map: null,
-  baseLayers: {},
-  currentBaseLayer: null,
-  currentBaseLayerKey: 'positron',
-  routeLayer: null,
-  originDestLayer: null,
-  clusterGroup: null,
-  busMarkers: new Map(), // vehicle_id -> L.Marker
-  originPinMarker: null,
-  destPinMarker: null,
+  mode: 'journey',
+  globe: null,
   originCoords: null,
   destCoords: null,
-  pickMode: null, // 'origin' | 'destination' | null
-  pollTimer: null,
-  selectedOption: null,
-  activeJourneyId: null,
-  searchAbortController: null,
-  _initialLiveFitted: false
+  pickMode: null,
+  journeyDs: null,
+  journeyData: null,
+  selectedOption: 0,
+  journeyAbort: null,
+  busCollection: null,
+  busById: new Map(),
+  busLayer: null,
+  routeBusLayer: null,
+  routeBusTimer: null,
+  follow: null,
+  followTimer: null,
+  liveTimer: null,
+  liveRows: [],
+  congestionPrim: null,
+  congestionWalls: null,
+  cgExtrude: true,
+  congestionCache: new Map(),
+  cgHour: 8,
+  cgWeekend: 0,
+  cgPlayTimer: null,
+  modelStatus: null,
 };
-window.state = state;
+window.pulseState = state;
 
-// Safe JSON fetch wrapper with standardized error handling
-async function safeFetchJson(url, options = {}) {
+const ROUTE_COLORS = ['#00d4ff', '#b18cff', '#22d38a'];
+const FRESH_COLORS = { FRESH: '#22d38a', AGING: '#f5b13d', STALE: '#ff5a5f' };
+
+/* ── helpers ─────────────────────────────────────────────── */
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function fetchJson(url, options = {}) {
   const res = await fetch(url, options);
-  const contentType = res.headers.get('content-type') || '';
+  const type = res.headers.get('content-type') || '';
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
-    if (contentType.includes('application/json')) {
-      try {
-        const errData = await res.json();
-        msg = errData?.error?.message || errData?.detail || msg;
-      } catch (e) {
-        msg = res.statusText || msg;
-      }
-    } else {
-      try {
-        const text = await res.text();
-        msg = text.slice(0, 100) || msg;
-      } catch (e) {
-        msg = res.statusText || msg;
-      }
+    if (type.includes('application/json')) {
+      try { const e = await res.json(); msg = e?.error?.message || e?.detail || msg; } catch (e) { /* keep */ }
     }
-    const err = new Error(msg);
-    err.status = res.status;
-    throw err;
+    const err = new Error(msg); err.status = res.status; throw err;
   }
-  if (!contentType.includes('application/json')) {
-    throw new Error('Unexpected non-JSON response from server');
-  }
-  return await res.json();
+  if (!type.includes('application/json')) throw new Error('The server sent an unexpected response.');
+  return res.json();
 }
 
-// Initialize Application on DOM Ready
-document.addEventListener('DOMContentLoaded', () => {
-  console.log(`[PULSE] Initialized - Build: ${PULSE_BUILD_VERSION}`);
-  initMap();
-  initNavigation();
-  initAutocomplete();
-  initMapPickMode();
-  initJourneyForm();
-  initTimeMachine();
-  loadCommandStatus();
-});
-
-// ==========================================
-// 1. LEAFLET MAP INITIALIZATION & BASEMAPS
-// ==========================================
-function initMap() {
-  // Center on Central Delhi (Connaught Place)
-  state.map = L.map('map-element', {
-    zoomControl: false
-  }).setView([28.6250, 77.2200], 12);
-
-  L.control.zoom({ position: 'bottomright' }).addTo(state.map);
-
-  // Retrieve injected client configurations synchronously from window.PULSE_CONFIG
-  let cartoKey = (window.PULSE_CONFIG && window.PULSE_CONFIG.cartoApiKey) 
-    ? window.PULSE_CONFIG.cartoApiKey.trim() 
-    : '';
-  let maptilerKey = (window.PULSE_CONFIG && window.PULSE_CONFIG.maptilerApiKey) 
-    ? window.PULSE_CONFIG.maptilerApiKey.trim() 
-    : '';
-
-  const cartoAttr = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank">CARTO</a>';
-  const osmAttr = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors';
-  const esriAttr = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
-  const maptilerAttr = '&copy; <a href="https://www.maptiler.com/copyright/" target="_blank">MapTiler</a> &copy; OpenStreetMap contributors';
-
-  // Base Layers
-  // 1. CARTO Positron (Default Light Street Map)
-  const positronUrl = cartoKey 
-    ? `https://{s}.basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png?key=${encodeURIComponent(cartoKey)}`
-    : 'https://{s}.basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png';
-  const positronLayer = L.tileLayer(positronUrl, { attribution: cartoAttr, subdomains: 'abcd', maxZoom: 19 });
-
-  // 2. CARTO Voyager (Detailed Clean Street Map)
-  const voyagerUrl = cartoKey 
-    ? `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=${encodeURIComponent(cartoKey)}`
-    : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png';
-  const voyagerLayer = L.tileLayer(voyagerUrl, { attribution: cartoAttr, subdomains: 'abcd', maxZoom: 19 });
-
-  // 3. CARTO Dark Matter (High-contrast Dark)
-  const darkUrl = cartoKey 
-    ? `https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png?key=${encodeURIComponent(cartoKey)}`
-    : 'https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png';
-  const darkLayer = L.tileLayer(darkUrl, { attribution: cartoAttr, subdomains: 'abcd', maxZoom: 19 });
-
-  // 4a. Satellite Plain (MapTiler Satellite v4 / Esri fallback)
-  const satPlainUrl = maptilerKey 
-    ? `https://api.maptiler.com/maps/satellite-v4/{z}/{x}/{y}.jpg?key=${encodeURIComponent(maptilerKey)}`
-    : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-  const satellitePlainLayer = L.tileLayer(satPlainUrl, { 
-    attribution: maptilerKey ? maptilerAttr : esriAttr, 
-    maxZoom: 20,
-    tileSize: maptilerKey ? 512 : 256,
-    zoomOffset: maptilerKey ? -1 : 0,
-    crossOrigin: true
-  });
-
-  // 4b. Satellite Hybrid (MapTiler Hybrid with Road Overlays / Esri fallback)
-  const satHybridUrl = maptilerKey 
-    ? `https://api.maptiler.com/maps/hybrid-v4/{z}/{x}/{y}.png?key=${encodeURIComponent(maptilerKey)}`
-    : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-  const satelliteHybridLayer = L.tileLayer(satHybridUrl, { 
-    attribution: maptilerKey ? maptilerAttr : esriAttr, 
-    maxZoom: 20,
-    tileSize: maptilerKey ? 512 : 256,
-    zoomOffset: maptilerKey ? -1 : 0,
-    crossOrigin: true
-  });
-
-  // 5. OpenStreetMap Standard
-  const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: osmAttr, maxZoom: 19 });
-
-  // Diagnostic Tile Error Handlers (Section 2.7)
-  [positronLayer, voyagerLayer, darkLayer, satellitePlainLayer, satelliteHybridLayer, osmLayer].forEach(layer => {
-    layer.on('tileerror', function(error) {
-      console.warn('Map tile loading warning:', error);
-      const statusDot = document.getElementById('layer-status-indicator');
-      if (statusDot) {
-        statusDot.className = 'layer-status-dot warning';
-        statusDot.title = 'Tile connection warning (fallback active)';
-      }
-    });
-    layer.on('tileload', function() {
-      const statusDot = document.getElementById('layer-status-indicator');
-      if (statusDot && statusDot.className.includes('warning')) {
-        statusDot.className = 'layer-status-dot';
-        statusDot.title = `Active: ${state.currentBaseLayerKey}`;
-      }
-    });
-  });
-
-  state.baseLayers = {
-    'positron': positronLayer,
-    'voyager': voyagerLayer,
-    'dark': darkLayer,
-    'satellite-plain': satellitePlainLayer,
-    'satellite-hybrid': satelliteHybridLayer,
-    'osm': osmLayer
-  };
-
-  // Wire up visible styled Map Style Selector with persistence & migration (Section 2.5)
-  initCustomLayerSelector(state.baseLayers);
-
-  // Overlay Feature Groups
-  state.routeLayer = L.featureGroup().addTo(state.map);
-  state.originDestLayer = L.featureGroup().addTo(state.map);
-
-  // Marker Cluster Group for Live DTC Buses
-  if (typeof L.markerClusterGroup === 'function') {
-    state.clusterGroup = L.markerClusterGroup({
-      disableClusteringAtZoom: 13, // individual bus icons with bearings at zoom >= 13
-      maxClusterRadius: 45,
-      spiderfyOnMaxZoom: true,
-      showCoverageOnHover: false,
-      zoomToBoundsOnClick: true,
-      iconCreateFunction: function (cluster) {
-        const count = cluster.getChildCount();
-        return L.divIcon({
-          html: `<div class="pulse-cluster"><span class="pulse-cluster-inner">${count}</span></div>`,
-          className: 'pulse-cluster-wrapper',
-          iconSize: [36, 36],
-          iconAnchor: [18, 18]
-        });
-      }
-    });
-  } else {
-    state.clusterGroup = L.featureGroup();
-  }
-  // Initially not added to map since default view is Journey Planner
-
-  // Map Click Listener for Coordinates & Picking
-  state.map.on('click', onMapClick);
+let toastTimer = null;
+function toast(msg, ms = 2600) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), ms);
 }
 
-function initCustomLayerSelector(baseLayers) {
-  const labels = document.querySelectorAll('.layer-radio-item');
-  const radios = document.querySelectorAll('input[name="pulse-map-style"]');
-  const statusIndicator = document.getElementById('layer-status-indicator');
+const fmtMin = (m) => (m == null || Number.isNaN(m) ? '–' : `${Math.round(m)}`);
+const color = (css, a = 1) => Cesium.Color.fromCssColorString(css).withAlpha(a);
 
-  const MIGRATION_KEY = 'pulse_style_migrated_v2';
-  const STORAGE_KEY = 'pulse_map_style';
-  let savedStyle = null;
+/* ── boot ────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', boot);
 
+async function boot() {
+  const status = $('.loader-status');
+  if (typeof Cesium === 'undefined') {
+    status.textContent = 'Could not load the 3D engine (CesiumJS). Check the network and reload.';
+    return;
+  }
+  const globe = new PulseGlobe('globe', CFG);
+  state.globe = globe;
   try {
-    savedStyle = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('map_style') || localStorage.getItem('pulse_basemap');
-    if (!localStorage.getItem(MIGRATION_KEY)) {
-      // Correct legacy dark preference back to default light (CARTO Positron)
-      if (savedStyle === 'dark' || savedStyle === 'dark_all' || savedStyle === 'carto-dark' || !savedStyle) {
-        savedStyle = 'positron';
-        localStorage.setItem(STORAGE_KEY, 'positron');
-      }
-      localStorage.setItem(MIGRATION_KEY, 'true');
+    await globe.init((s) => { status.textContent = s; });
+  } catch (err) {
+    console.error(err);
+    status.textContent = `Globe failed to start: ${err.message}`;
+    return;
+  }
+  const viewer = globe.viewer;
+  state.journeyDs = new Cesium.CustomDataSource('journey');
+  viewer.dataSources.add(state.journeyDs);
+  state.busLayer = new BusLayer(viewer);
+  state.busLayer.show = false;
+  state.busCollection = state.busLayer.billboards;
+  state.routeBusLayer = new BusLayer(viewer, { alwaysIcons: true });
+
+  wireChrome();
+  wireJourney();
+  wireLive();
+  wireCongestion();
+  wireClicks();
+  startHud();
+  loadModelStatus();
+  checkFeed();
+
+  status.textContent = 'Locking on to Delhi…';
+  setTimeout(() => $('#loading-screen').classList.add('done'), 600);
+  globe.intro();
+}
+
+/* ── chrome: dock, chips, rail ───────────────────────────── */
+function wireChrome() {
+  $$('.dock-btn').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  $$('[data-stack]').forEach((b) => b.addEventListener('click', () => {
+    const s = state.globe.setStack(b.dataset.stack);
+    toast(`Map: ${b.textContent.trim()}`);
+    if (state.journeyData) drawJourney(state.journeyData.options[state.selectedOption]);
+    if (state.mode === 'live') renderBuses(state.liveRows);
+    return s;
+  }));
+  $$('button[data-vision]').forEach((b) => b.addEventListener('click', () => state.globe.setVision(b.dataset.vision)));
+  $('#btn-fly-delhi').addEventListener('click', () => state.globe.flyToCity(2.5));
+  $('#btn-zoom-in').addEventListener('click', () => state.globe.zoom(0.45));
+  $('#btn-zoom-out').addEventListener('click', () => state.globe.zoom(-0.8));
+  $$('[data-labels]').forEach((b) => b.addEventListener('click', () => {
+    const on = state.globe.setLabels(!state.globe.labels);
+    toast(on ? 'Road and place names on' : 'Names off');
+  }));
+  $('#btn-reset-globe').addEventListener('click', () => state.globe.resetGlobe());
+  $('#btn-tilt').addEventListener('click', () => state.globe.toggleTilt());
+  $('#btn-inspector-close').addEventListener('click', closeInspector);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { cancelPick(); closeInspector(); }
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
+    if (typing) return;
+    if (e.key === '+' || e.key === '=') state.globe.zoom(0.45);
+    if (e.key === '-' || e.key === '_') state.globe.zoom(-0.8);
+  });
+}
+
+function setMode(mode) {
+  if (state.mode === mode) return;
+  state.mode = mode;
+  document.body.dataset.mode = mode;
+  $$('.dock-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+  $$('.mode-pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === mode));
+  $('#mode-indicator-value').textContent = mode.toUpperCase();
+  cancelPick();
+  closeInspector();
+
+  state.journeyDs.show = mode === 'journey';
+  state.busLayer.show = mode === 'live';
+  state.routeBusLayer.show = mode === 'journey';
+  if (mode !== 'journey') stopRouteBuses(); else if (state.journeyData) startRouteBuses();
+  if (state.congestionPrim) state.congestionPrim.show = mode === 'congestion';
+  if (state.congestionWalls) state.congestionWalls.show = mode === 'congestion' && state.cgExtrude;
+
+  clearTimeout(state.liveTimer); state.liveTimer = null;
+  stopFollow();
+  if (mode !== 'congestion') stopPlay();
+
+  if (mode === 'live') {
+    liveLoop();
+  } else if (mode === 'congestion') {
+    loadCongestion();
+  } else if (mode === 'validation') {
+    loadValidation();
+  } else if (mode === 'system') {
+    loadSystem();
+  }
+}
+
+/* ── HUD ─────────────────────────────────────────────────── */
+function startHud() {
+  const viewer = state.globe.viewer;
+  const ll = $('#hud-latlon'); const alt = $('#hud-alt'); const hdg = $('#hud-hdg'); const pit = $('#hud-pitch');
+  const clock = $('#hud-clock'); const loc = $('#hud-locality');
+  const istFmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  setInterval(() => {
+    const cam = viewer.camera;
+    const h = cam.positionCartographic.height;
+    alt.textContent = h > 100000 ? `${(h / 1000).toFixed(0)} KM` : `${Math.round(h).toLocaleString()} M`;
+    hdg.textContent = `${String(Math.round(Cesium.Math.toDegrees(cam.heading)) % 360).padStart(3, '0')}°`;
+    pit.textContent = `${Math.round(Cesium.Math.toDegrees(cam.pitch))}°`;
+    clock.textContent = istFmt.format(new Date());
+    const canvas = viewer.scene.canvas;
+    const c = state.globe.pickLatLon(new Cesium.Cartesian2(canvas.clientWidth / 2, canvas.clientHeight / 2));
+    if (c) {
+      ll.textContent = `${Math.abs(c.lat).toFixed(4)}${c.lat >= 0 ? 'N' : 'S'} ${Math.abs(c.lon).toFixed(4)}${c.lon >= 0 ? 'E' : 'W'}`;
+      const inDelhi = c.lat > 28.40 && c.lat < 28.90 && c.lon > 76.84 && c.lon < 77.35;
+      loc.textContent = inDelhi ? 'NATIONAL CAPITAL TERRITORY · DTC NETWORK' : (h > 2_000_000 ? 'ORBITAL VIEW' : 'OUTSIDE SERVICE AREA');
+    } else {
+      ll.textContent = 'SPACE';
+      loc.textContent = 'ORBITAL VIEW';
     }
+  }, 250);
+}
+
+async function loadModelStatus() {
+  try {
+    const m = await fetchJson('/api/v1/analytics/model');
+    state.modelStatus = m;
+    $('#hud-model').textContent = m.status === 'READY'
+      ? `MODEL · ${m.cells_measured_pct}% CELLS MEASURED`
+      : 'MODEL · NOT TRAINED';
   } catch (e) {
-    savedStyle = 'positron';
+    $('#hud-model').textContent = 'MODEL · UNAVAILABLE';
   }
+}
 
-  if (!savedStyle || !baseLayers[savedStyle]) {
-    savedStyle = 'positron';
+async function checkFeed() {
+  try {
+    const h = await fetchJson('/api/v1/vehicles/health');
+    const st = (h.status || h.feed_status || '').toString().toUpperCase();
+    $('#hud-feed').textContent = CFG.liveEnabled ? (st || 'CONFIGURED') : 'OFF · HISTORICAL MODE';
+  } catch (e) {
+    $('#hud-feed').textContent = CFG.liveEnabled ? 'UNREACHABLE' : 'OFF · HISTORICAL MODE';
   }
+}
 
-  function switchLayer(layerKey) {
-    if (!baseLayers[layerKey]) return;
-
-    // Persist user selection
-    try {
-      localStorage.setItem(STORAGE_KEY, layerKey);
-    } catch (e) {}
-
-    // Avoid redundant swaps if already the active Leaflet layer
-    if (state.currentBaseLayerKey === layerKey && state.map.hasLayer(baseLayers[layerKey])) {
-      labels.forEach(lbl => {
-        const isMatch = (lbl.dataset.layer === layerKey);
-        lbl.classList.toggle('active', isMatch);
-        const radio = lbl.querySelector('input[type="radio"]');
-        if (radio) radio.checked = isMatch;
-      });
+/* ── globe clicks + pick mode ────────────────────────────── */
+function wireClicks() {
+  const viewer = state.globe.viewer;
+  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  handler.setInputAction((ev) => {
+    const ll = state.globe.pickLatLon(ev.position);
+    if (state.pickMode) {
+      if (!ll) { toast('Click on the ground, not the sky'); return; }
+      const label = `${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)}`;
+      if (state.pickMode === 'origin') setOrigin(label, ll.lat, ll.lon); else setDestination(label, ll.lat, ll.lon);
+      cancelPick();
       return;
     }
-
-    // Remove existing base layers
-    Object.values(baseLayers).forEach(layer => {
-      if (state.map.hasLayer(layer)) {
-        state.map.removeLayer(layer);
-      }
-    });
-
-    // Add selected layer
-    const newLayer = baseLayers[layerKey];
-    newLayer.addTo(state.map);
-    state.currentBaseLayer = newLayer;
-    state.currentBaseLayerKey = layerKey;
-
-    // Synchronize UI active classes and radio inputs
-    labels.forEach(lbl => {
-      const isMatch = (lbl.dataset.layer === layerKey);
-      lbl.classList.toggle('active', isMatch);
-      const radio = lbl.querySelector('input[type="radio"]');
-      if (radio) radio.checked = isMatch;
-    });
-
-    if (statusIndicator) {
-      statusIndicator.className = 'layer-status-dot';
-      statusIndicator.title = `Active: ${layerKey}`;
+    const picked = viewer.scene.pick(ev.position);
+    if (picked && picked.primitive && picked.id && picked.id.kind === 'bus') {
+      const layer = picked.id.layer === 'route' ? state.routeBusLayer : state.busLayer;
+      showBus(layer.rows.get(picked.id.vehicle_id) || picked.id.vehicle);
+      return;
     }
-  }
+    if (picked && picked.id instanceof Cesium.Entity && picked.id.properties) {
+      const p = picked.id.properties.getValue(Cesium.JulianDate.now());
+      if (p && p.html) { openInspector(p.html); return; }
+    }
+    if (state.mode === 'journey' && ll) {
+      const label = `${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)}`;
+      openInspector(`
+        <div class="insp-kicker">SELECTED POINT</div>
+        <div class="insp-title">${ll.lat.toFixed(4)}°N, ${ll.lon.toFixed(4)}°E</div>
+        <p class="muted small">Use this spot as the start or end of a journey. PULSE walks you to the nearest stops.</p>
+        <div class="insp-actions">
+          <button class="btn-ghost" id="insp-set-from"><span class="material-symbols-outlined">trip_origin</span>Set as From</button>
+          <button class="btn-ghost" id="insp-set-to"><span class="material-symbols-outlined">location_on</span>Set as To</button>
+        </div>`);
+      $('#insp-set-from').onclick = () => { setOrigin(label, ll.lat, ll.lon); closeInspector(); };
+      $('#insp-set-to').onclick = () => { setDestination(label, ll.lat, ll.lon); closeInspector(); };
+    } else if (state.mode === 'congestion' && ll) {
+      // nothing selectable on the ground-classified layer; keep the clock card in focus
+    }
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-  labels.forEach(lbl => {
-    lbl.addEventListener('click', (e) => {
-      const key = lbl.dataset.layer;
-      switchLayer(key);
-    });
-  });
-
-  radios.forEach(r => {
-    r.addEventListener('change', () => {
-      switchLayer(r.value);
-    });
-  });
-
-  // Initialize with migrated/persisted active layer
-  switchLayer(savedStyle);
+  $('#btn-pick-origin').addEventListener('click', () => (state.pickMode === 'origin' ? cancelPick() : startPick('origin')));
+  $('#btn-pick-dest').addEventListener('click', () => (state.pickMode === 'destination' ? cancelPick() : startPick('destination')));
+  $('#btn-cancel-pick').addEventListener('click', cancelPick);
 }
 
-// ==========================================
-// 2. RAPIDO-STYLE TOP-DOWN 2D CITY BUS SVG
-// ==========================================
+function startPick(target) {
+  state.pickMode = target;
+  document.body.classList.add('picking');
+  $('#pick-banner').hidden = false;
+  $('#pick-banner-text').textContent = target === 'origin' ? 'Click the globe to set where you start' : 'Click the globe to set where you are going';
+  $('#btn-pick-origin').classList.toggle('active', target === 'origin');
+  $('#btn-pick-dest').classList.toggle('active', target === 'destination');
+}
+
+function cancelPick() {
+  state.pickMode = null;
+  document.body.classList.remove('picking');
+  $('#pick-banner').hidden = true;
+  $('#btn-pick-origin').classList.remove('active');
+  $('#btn-pick-dest').classList.remove('active');
+}
+
+function openInspector(html) {
+  $('#inspector-body').innerHTML = html;
+  $('#inspector').hidden = false;
+}
+function closeInspector() { $('#inspector').hidden = true; stopFollow(); }
+
+/* ── JOURNEY ─────────────────────────────────────────────── */
+function wireJourney() {
+  setupAutocomplete($('#input-origin'), $('#origin-suggestions'), (it) => setOrigin(it.name, it.lat, it.lon));
+  setupAutocomplete($('#input-dest'), $('#dest-suggestions'), (it) => setDestination(it.name, it.lat, it.lon));
+  $$('.preset').forEach((p) => p.addEventListener('click', () => {
+    $$('.preset').forEach((x) => x.classList.remove('active'));
+    p.classList.add('active');
+    if (p.dataset.time === 'now') {
+      const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+        .formatToParts(new Date()).map((x) => [x.type, x.value]));
+      $('#input-time').value = `${parts.hour === '24' ? '00' : parts.hour}:${parts.minute}`;
+      $('#input-date').value = `${parts.year}-${parts.month}-${parts.day}`;
+    } else {
+      $('#input-time').value = p.dataset.time;
+    }
+  }));
+  $('#input-time').addEventListener('input', () => $$('.preset').forEach((x) => x.classList.toggle('active', x.dataset.time === $('#input-time').value)));
+  $('#btn-swap').addEventListener('click', () => {
+    const o = $('#input-origin'); const d = $('#input-dest');
+    [o.value, d.value] = [d.value, o.value];
+    [state.originCoords, state.destCoords] = [state.destCoords, state.originCoords];
+  });
+  $('#input-origin').addEventListener('input', () => { state.originCoords = null; });
+  $('#input-dest').addEventListener('input', () => { state.destCoords = null; });
+  $('#journey-form').addEventListener('submit', (e) => { e.preventDefault(); planJourney(); });
+}
+
+window.setOrigin = function setOrigin(name, lat, lon) {
+  $('#input-origin').value = name;
+  state.originCoords = (typeof lat === 'number' && typeof lon === 'number') ? { lat, lon, name } : null;
+  drawEndpoints();
+};
+window.setDestination = function setDestination(name, lat, lon) {
+  $('#input-dest').value = name;
+  state.destCoords = (typeof lat === 'number' && typeof lon === 'number') ? { lat, lon, name } : null;
+  drawEndpoints();
+};
+const setOrigin = window.setOrigin;
+const setDestination = window.setDestination;
+
+function setupAutocomplete(input, box, onSelect) {
+  let timer = null; let items = []; let focus = -1; let ctrl = null;
+  const close = () => { box.hidden = true; focus = -1; };
+  const render = () => {
+    box.innerHTML = items.map((it, i) => {
+      const icon = it.type === 'STOP' ? 'directions_bus' : (it.type === 'COORDINATE' ? 'my_location' : 'place');
+      const tag = it.type === 'STOP' ? 'STOP' : (it.type === 'COORDINATE' ? 'COORD' : 'PLACE');
+      return `<div class="suggestion${i === focus ? ' focused' : ''}" role="option" data-i="${i}">
+        <span class="material-symbols-outlined">${icon}</span>
+        <div class="suggestion-main"><div class="suggestion-name">${esc(it.name)}</div><div class="suggestion-sub">${esc(it.formatted_address || '')}</div></div>
+        <span class="suggestion-tag">${tag}</span></div>`;
+    }).join('');
+    box.hidden = items.length === 0;
+  };
+  box.addEventListener('mousedown', (e) => {
+    const row = e.target.closest('.suggestion');
+    if (!row) return;
+    e.preventDefault();
+    onSelect(items[Number(row.dataset.i)]);
+    close();
+  });
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    clearTimeout(timer);
+    if (q.length < 2) { items = []; close(); return; }
+    timer = setTimeout(async () => {
+      try {
+        if (ctrl) ctrl.abort();
+        ctrl = new AbortController();
+        const data = await fetchJson(`/api/v1/places/autocomplete?q=${encodeURIComponent(q)}&limit=8`, { signal: ctrl.signal });
+        items = data.suggestions || []; focus = -1; render();
+      } catch (err) { if (err.name !== 'AbortError') console.warn('autocomplete', err.message); }
+    }, 200);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (box.hidden) return;
+    if (e.key === 'ArrowDown') { focus = Math.min(items.length - 1, focus + 1); render(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { focus = Math.max(0, focus - 1); render(); e.preventDefault(); }
+    else if (e.key === 'Enter' && focus >= 0) { onSelect(items[focus]); close(); e.preventDefault(); }
+    else if (e.key === 'Escape') close();
+  });
+  input.addEventListener('blur', () => setTimeout(close, 120));
+}
+
+function locationParam(coords, text) {
+  return coords ? `${coords.lat.toFixed(5)}, ${coords.lon.toFixed(5)}` : text;
+}
+
+async function planJourney() {
+  const from = locationParam(state.originCoords, $('#input-origin').value.trim());
+  const to = locationParam(state.destCoords, $('#input-dest').value.trim());
+  if (!from || !to) return;
+  const time = $('#input-time').value || '08:30';
+  const date = $('#input-date').value;
+  const btn = $('#btn-plan');
+  btn.disabled = true;
+  btn.querySelector('.btn-label').textContent = 'Running the traffic model…';
+  const results = $('#journey-results');
+  results.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div>';
+  if (state.journeyAbort) state.journeyAbort.abort();
+  state.journeyAbort = new AbortController();
+  stopRouteBuses();
+  state.routeBusLayer.clear();
+  try {
+    const url = `/api/v1/journeys?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&depart_at=${encodeURIComponent(`${time}:00`)}${date ? `&date=${date}` : ''}`;
+    const data = await fetchJson(url, { signal: state.journeyAbort.signal });
+    state.journeyData = data;
+    renderJourney(data);
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    state.journeyData = null;
+    state.journeyDs.entities.removeAll();
+    results.innerHTML = `<div class="notice error"><strong>No journey found.</strong> ${esc(err.message)}<br>Pick a suggestion from the list, or click the globe to drop an exact point.</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.querySelector('.btn-label').textContent = 'Find journeys';
+  }
+}
+
+function heatStrip(opt) {
+  const runs = (opt.legs || []).filter((l) => l.type === 'BUS').flatMap((l) => l.heat || []);
+  if (!runs.length) return '';
+  const total = runs.reduce((a, r) => a + r.coords.length - 1, 0) || 1;
+  const spans = runs.map((r) => {
+    const [cr, cg, cb] = ciColor(r.ci);
+    return `<span style="width:${((r.coords.length - 1) / total) * 100}%;background:rgb(${cr},${cg},${cb})" title="${esc(r.time)} · ${r.ci}× · ${r.speed_kmh} km/h"></span>`;
+  }).join('');
+  const worst = runs.reduce((a, r) => (r.ci > a.ci ? r : a), runs[0]);
+  return `<div class="heat-label"><span>Traffic along the ride</span><span>worst ${worst.ci}× at ${esc(worst.time)}</span></div><div class="heat-strip" aria-hidden="true">${spans}</div>`;
+}
+
+function sourceBadge(opt) {
+  const legs = (opt.legs || []).filter((l) => l.type === 'BUS');
+  const shares = legs.map((l) => l.measured_share).filter((x) => typeof x === 'number');
+  const share = shares.length ? shares.reduce((a, b) => a + b, 0) / shares.length : null;
+  const prov = String(opt.provenance || '');
+  if (prov.includes('LIVE')) return '<span class="badge live" title="Live GPS fused with history">LIVE + HISTORY</span>';
+  if (prov === 'UNTRAINED') return '<span class="badge borrowed" title="Model not trained yet">UNTRAINED</span>';
+  if (share != null) {
+    const pct = Math.round(share * 100);
+    const cls = pct >= 50 ? 'hist' : 'borrowed';
+    return `<span class="badge ${cls}" title="Share of road stretches with direct GPS measurements at this time; the rest borrow from the same stretch at nearby times, the route, or the network">${pct}% MEASURED</span>`;
+  }
+  return `<span class="badge hist">${esc(prov || 'HISTORICAL')}</span>`;
+}
+
+function renderJourney(data) {
+  const box = $('#journey-results');
+  if (data.status !== 'SUCCESS' || !data.options?.length) {
+    state.journeyDs.entities.removeAll();
+    box.innerHTML = `<div class="empty">No bus connection found between <strong>${esc(data.origin)}</strong> and <strong>${esc(data.destination)}</strong>.<br>Try a nearby major stop, or drop a point on the globe.</div>`;
+    return;
+  }
+  let html = '';
+  if (data.off_peak_comparison && Math.abs(data.off_peak_comparison.peak_duration_minutes - data.off_peak_comparison.off_peak_duration_minutes) >= 1) {
+    const c = data.off_peak_comparison;
+    html += `<div class="insight"><span class="material-symbols-outlined">insights</span><div>The same trip at <strong>${esc(c.off_peak_departure)}</strong> is predicted at <strong>${fmtMin(c.off_peak_duration_minutes)} min</strong> vs <strong>${fmtMin(c.peak_duration_minutes)} min</strong> at your time.</div></div>`;
+  }
+  data.options.forEach((opt, i) => {
+    const walk = opt.walking_minutes || 0; const wait = opt.waiting_minutes || 0; const ride = opt.in_vehicle_minutes || 0;
+    const total = Math.max(walk + wait + ride, 1);
+    const lo = opt.lower_bound_minutes; const hi = opt.upper_bound_minutes;
+    let busIdx = 0;
+    const legs = (opt.legs || []).map((l) => {
+      if (l.type === 'BUS') {
+        const c = ROUTE_COLORS[busIdx++ % ROUTE_COLORS.length];
+        return `<div class="leg"><div class="leg-rail"><span class="material-symbols-outlined" style="color:${c}">directions_bus</span></div>
+          <div class="leg-body"><span class="leg-route" style="background:${c}">${esc(l.route_name)}</span> ${esc(l.boarding_stop)} → ${esc(l.alighting_stop)}
+          <div class="leg-meta">Ride ${fmtMin(l.predicted_duration_minutes)} min (${fmtMin(l.lower_bound_minutes)}–${fmtMin(l.upper_bound_minutes)}) · ${l.distance_km} km · ${l.stops_traversed} stops${l.expected_wait_minutes != null ? ` · wait ~${fmtMin(l.expected_wait_minutes)} min` : ''}${l.congestion_index > 1.05 ? ` · ${l.congestion_index}× free-flow time` : ''}${l.live_weight > 0.05 ? ` · <span style="color:var(--fresh)">live ${Math.round(l.live_weight * 100)}% (${l.live_buses} buses)</span>` : ''}</div></div></div>`;
+      }
+      if (l.type === 'TRANSFER') {
+        return `<div class="leg"><div class="leg-rail"><span class="material-symbols-outlined" style="color:var(--transfer)">transfer_within_a_station</span></div>
+          <div class="leg-body">${esc(l.instruction || `Change at ${l.transfer_stop}`)}<div class="leg-meta">${l.expected_wait_minutes != null ? `Wait ~${fmtMin(l.expected_wait_minutes)} min` : ''}</div></div></div>`;
+      }
+      return `<div class="leg"><div class="leg-rail"><span class="material-symbols-outlined">directions_walk</span></div>
+        <div class="leg-body">${esc(l.instruction)}<div class="leg-meta">${fmtMin(l.duration_minutes)} min · ${Math.round(l.distance_m || 0)} m</div></div></div>`;
+    }).join('');
+    html += `
+      <article class="journey-card${i === state.selectedOption ? ' selected' : ''}" data-i="${i}" tabindex="0">
+        <div class="jc-top">
+          <div>
+            <div class="jc-time">${fmtMin(opt.total_duration_minutes)}<small>min</small></div>
+            <div class="jc-range">Likely ${fmtMin(lo)}–${fmtMin(hi)} min · ${opt.transfers === 0 ? 'direct' : `${opt.transfers} change${opt.transfers > 1 ? 's' : ''}`}</div>
+          </div>
+          <div class="jc-badges">${sourceBadge(opt)}<span class="badge ${opt.confidence === 'HIGH' ? 'high' : 'low'}">${esc(opt.confidence)}</span></div>
+        </div>
+        <div class="time-bar" aria-hidden="true">
+          <span class="tb-walk" style="width:${(walk / total) * 100}%"></span>
+          <span class="tb-wait" style="width:${(wait / total) * 100}%"></span>
+          <span class="tb-ride" style="width:${(ride / total) * 100}%"></span>
+        </div>
+        <div class="time-legend">
+          <span><i style="background:#8a93a6"></i>Walk ${fmtMin(walk)}</span>
+          <span><i style="background:var(--transfer)"></i>Wait ${fmtMin(wait)}</span>
+          <span><i style="background:var(--accent)"></i>Ride ${fmtMin(ride)}</span>
+        </div>
+        ${heatStrip(opt)}
+        <div class="route-buses" hidden></div>
+        <div class="legs">${legs}</div>
+      </article>`;
+  });
+  box.innerHTML = html;
+  state.selectedOption = 0;
+  $$('.journey-card').forEach((card) => {
+    const pick = () => {
+      $$('.journey-card').forEach((c) => c.classList.remove('selected'));
+      card.classList.add('selected');
+      state.selectedOption = Number(card.dataset.i);
+      drawJourney(data.options[state.selectedOption], true);
+      startRouteBuses();
+    };
+    card.addEventListener('click', pick);
+    card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+  });
+  $$('.journey-card')[0]?.classList.add('selected');
+  drawJourney(data.options[0], true);
+  if (state.mode === 'journey') startRouteBuses();
+}
+
+/* 3D route drawing: a glowing ground line, a translucent "curtain" wall
+   rising from it, and light beams with labels at stops. */
+async function drawJourney(opt, fly = false) {
+  const ds = state.journeyDs;
+  const g = state.globe;
+  ds.entities.removeAll();
+  if (!opt) { drawEndpoints(); return; }
+  const all = [];
+  let busIdx = 0;
+  for (const leg of opt.legs || []) {
+    const geom = (leg.geometry || []).filter((p) => Array.isArray(p) && p.length >= 2);
+    geom.forEach((p) => all.push(p));
+    if (leg.type === 'WALK' && geom.length >= 2) {
+      ds.entities.add({
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArray(geom.flatMap(([la, lo]) => [lo, la])),
+          width: 3,
+          clampToGround: true,
+          material: new Cesium.PolylineDashMaterialProperty({ color: color('#c9d1e0', 0.9), dashLength: 14 }),
+        },
+      });
+    }
+    if (leg.type === 'BUS' && geom.length >= 2) {
+      const css = ROUTE_COLORS[busIdx++ % ROUTE_COLORS.length];
+      const base = await g.groundHeight(geom[0][0], geom[0][1]);
+      const heat = (leg.heat || []).filter((r) => r.coords && r.coords.length >= 2);
+      if (heat.length) {
+        // Traffic heat map along the route at the time the bus is predicted to
+        // pass each stretch (same colour scale as the Congestion view); walls
+        // rise where it is slow.
+        for (const r of heat) {
+          const [cr, cg, cb] = ciColor(r.ci);
+          const c = new Cesium.Color(cr / 255, cg / 255, cb / 255, 1);
+          const html = `<div class="insp-kicker">ROUTE ${esc(leg.route_name)} · STRETCH AT ${esc(r.time)}</div>
+            <div class="insp-title">${r.ci}× free-flow time</div>
+            <dl class="kv"><dt>Bus speed</dt><dd>${r.speed_kmh} km/h</dd><dt>Data</dt><dd>${r.measured ? 'measured at this time' : 'borrowed (nearby time / route / network)'}</dd></dl>`;
+          const flatR = r.coords.flatMap(([la, lo]) => [lo, la]);
+          ds.entities.add({
+            polyline: { positions: Cesium.Cartesian3.fromDegreesArray(flatR), width: 8, clampToGround: true, material: c.withAlpha(0.95) },
+            properties: { html },
+          });
+          const h = 60 + Math.min(600, Math.max(0, r.ci - 1) * 260);
+          ds.entities.add({
+            wall: {
+              positions: Cesium.Cartesian3.fromDegreesArray(flatR),
+              minimumHeights: r.coords.map(() => base),
+              maximumHeights: r.coords.map(() => base + h),
+              material: c.withAlpha(0.32),
+              outline: false,
+            },
+            properties: { html },
+          });
+        }
+      } else {
+        ds.entities.add({
+          polyline: {
+            positions: Cesium.Cartesian3.fromDegreesArray(geom.flatMap(([la, lo]) => [lo, la])),
+            width: 7,
+            clampToGround: true,
+            material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.22, color: color(css, 0.95) }),
+          },
+        });
+      }
+      addBeam(leg.boarding_lat, leg.boarding_lon, base, `${leg.route_name} · board`, leg.boarding_stop, css, 260,
+        `<div class="insp-kicker">BOARD · ROUTE ${esc(leg.route_name)}</div><div class="insp-title">${esc(leg.boarding_stop)}</div>
+         <dl class="kv"><dt>Departs</dt><dd>${esc(leg.departure_time || '–')}</dd><dt>Ride</dt><dd>${fmtMin(leg.predicted_duration_minutes)} min (${fmtMin(leg.lower_bound_minutes)}–${fmtMin(leg.upper_bound_minutes)})</dd>
+         <dt>Distance</dt><dd>${leg.distance_km} km</dd><dt>Stops</dt><dd>${leg.stops_traversed}</dd>
+         <dt>Wait</dt><dd>${leg.expected_wait_minutes != null ? `~${fmtMin(leg.expected_wait_minutes)} min` : '–'} <span class="muted small">(${esc(leg.wait_source || '')})</span></dd>
+         <dt>Measured</dt><dd>${leg.measured_share != null ? `${Math.round(leg.measured_share * 100)}% of stretches` : '–'}</dd>
+         <dt>Traffic</dt><dd>${leg.congestion_index ? `${leg.congestion_index}× free-flow` : '–'}</dd></dl>`);
+      addBeam(leg.alighting_lat, leg.alighting_lon, base, 'alight', leg.alighting_stop, css, 200,
+        `<div class="insp-kicker">ALIGHT</div><div class="insp-title">${esc(leg.alighting_stop)}</div>`);
+    }
+    if (leg.type === 'TRANSFER' && leg.transfer_lat && leg.transfer_lon) {
+      const base = await g.groundHeight(leg.transfer_lat, leg.transfer_lon);
+      addBeam(leg.transfer_lat, leg.transfer_lon, base, 'change', leg.transfer_stop, '#ffb020', 300,
+        `<div class="insp-kicker">CHANGE BUSES</div><div class="insp-title">${esc(leg.transfer_stop)}</div><p class="small muted">${esc(leg.instruction || '')}</p>`);
+    }
+  }
+  drawEndpoints();
+  if (state.originCoords) all.push([state.originCoords.lat, state.originCoords.lon]);
+  if (state.destCoords) all.push([state.destCoords.lat, state.destCoords.lon]);
+  if (fly && all.length) g.flyToPositions(all, { pitch: -42, padding: 1.45, avoidPanel: true });
+}
+
+function addBeam(lat, lon, base, caption, name, css, height, html) {
+  if (typeof lat !== 'number' || typeof lon !== 'number') return;
+  const ds = state.journeyDs;
+  ds.entities.add({
+    polyline: {
+      positions: Cesium.Cartesian3.fromDegreesArrayHeights([lon, lat, base, lon, lat, base + height]),
+      width: 6,
+      material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.35, color: color(css, 0.9) }),
+    },
+    properties: { html },
+  });
+  ds.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, base + height + 12),
+    point: { pixelSize: 9, color: color(css), outlineColor: Cesium.Color.BLACK.withAlpha(0.6), outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    label: {
+      text: `${name || ''}`.toUpperCase().slice(0, 34),
+      font: '600 12px "JetBrains Mono", monospace',
+      fillColor: Cesium.Color.WHITE,
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 3,
+      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      pixelOffset: new Cesium.Cartesian2(0, -16),
+      showBackground: true,
+      backgroundColor: color('#07080d', 0.66),
+      backgroundPadding: new Cesium.Cartesian2(7, 4),
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 60000),
+    },
+    properties: { html },
+  });
+}
+
+function drawEndpoints() {
+  const ds = state.journeyDs;
+  if (!ds) return;
+  ['pin-origin', 'pin-dest'].forEach((id) => { const e = ds.entities.getById(id); if (e) ds.entities.remove(e); });
+  const base = state.globe.baseHeight();
+  const add = (id, c, css, tag) => {
+    if (!c) return;
+    ds.entities.add({
+      id,
+      position: Cesium.Cartesian3.fromDegrees(c.lon, c.lat, base + 340),
+      point: { pixelSize: 12, color: color(css), outlineColor: Cesium.Color.WHITE, outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+      label: {
+        text: tag, font: '700 11px "JetBrains Mono", monospace', fillColor: color(css), outlineColor: Cesium.Color.BLACK, outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0, -18), disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      polyline: {
+        positions: Cesium.Cartesian3.fromDegreesArrayHeights([c.lon, c.lat, base, c.lon, c.lat, base + 340]),
+        width: 8,
+        material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.3, color: color(css, 0.9) }),
+      },
+    });
+  };
+  add('pin-origin', state.originCoords, '#22d38a', 'FROM');
+  add('pin-dest', state.destCoords, '#ff4d6d', 'TO');
+}
+
+/* ── LIVE ────────────────────────────────────────────────── */
+const busImageCache = {};
+function busImage(freshness) {
+  const key = (freshness || 'FRESH').toUpperCase();
+  if (!busImageCache[key]) {
+    busImageCache[key] = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(createBusSvg(key, 0))}`;
+  }
+  return busImageCache[key];
+}
+
+/**
+ * Top-down 2D city bus used as a globe billboard. The billboard itself is
+ * rotated to the vehicle bearing (alignedAxis = up), so the SVG is drawn
+ * pointing north.
+ */
 function createBusSvg(freshnessState, bearing) {
   const fState = (freshnessState || 'FRESH').toUpperCase();
   const glowColor = fState === 'FRESH' ? '#10B981' : (fState === 'AGING' ? '#F59E0B' : '#EF4444');
   const strokeColor = fState === 'FRESH' ? '#059669' : (fState === 'AGING' ? '#92400E' : '#7F1D1D');
   const highlightColor = fState === 'FRESH' ? '#86EFAC' : (fState === 'AGING' ? '#FDE68A' : '#FCA5A5');
-  const rotation = (typeof bearing === 'number' && !isNaN(bearing)) ? Math.round(bearing) : 0;
-  const hasBearing = (typeof bearing === 'number' && !isNaN(bearing) && bearing >= 0);
-
-  const stateClass = fState.toLowerCase();
-  return `
-    <div class="pulse-bus-rotate rapido-bus-icon status-${stateClass} freshness-${stateClass}" style="transform: rotate(${rotation}deg); transform-origin: center center;">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 120" width="32" height="60" shape-rendering="geometricPrecision">
-        <defs>
-          <filter id="bus-glow-${fState}" x="-30%" y="-30%" width="160%" height="160%">
-            <feDropShadow dx="0" dy="1" stdDeviation="3.0" flood-color="${glowColor}" flood-opacity="0.85"/>
-            <feDropShadow dx="0" dy="0" stdDeviation="6.0" flood-color="${glowColor}" flood-opacity="0.45"/>
-          </filter>
-          <linearGradient id="windshield-grad" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#E0F2FE" />
-            <stop offset="100%" stop-color="#93C5FD" />
-          </linearGradient>
-        </defs>
-        <g filter="url(#bus-glow-${fState})">
-          <!-- 4 Side Wheels -->
-          <rect x="2" y="18" width="5" height="18" rx="2" fill="#1e293b"/>
-          <rect x="57" y="18" width="5" height="18" rx="2" fill="#1e293b"/>
-          <rect x="2" y="84" width="5" height="18" rx="2" fill="#1e293b"/>
-          <rect x="57" y="84" width="5" height="18" rx="2" fill="#1e293b"/>
-
-          <!-- Main Bus Chassis -->
-          <rect x="6" y="8" width="52" height="104" rx="10" ry="10" fill="#ffffff" stroke="${strokeColor}" stroke-width="2.2"/>
-          
-          <!-- Directional Headlight Beams (Front) -->
-          <polygon points="10,8 14,0 22,0 18,8" fill="#FEF08A" opacity="${hasBearing ? '0.95' : '0.4'}"/>
-          <polygon points="54,8 50,0 42,0 46,8" fill="#FEF08A" opacity="${hasBearing ? '0.95' : '0.4'}"/>
-          
-          <!-- Front Bumper Color Strip -->
-          <rect x="14" y="6" width="36" height="5" rx="2" fill="${glowColor}"/>
-
-          <!-- Destination Display Strip -->
-          <rect x="16" y="13" width="32" height="6" rx="1.5" fill="#FACC15"/>
-          
-          <!-- Curved Windshield with Gradient -->
-          <path d="M 12 24 Q 32 18 52 24 L 50 38 L 14 38 Z" fill="url(#windshield-grad)" stroke="#38bdf8" stroke-width="0.8"/>
-          
-          <!-- Side Mirrors -->
-          <rect x="0" y="22" width="6" height="9" rx="2" fill="#334155"/>
-          <rect x="58" y="22" width="6" height="9" rx="2" fill="#334155"/>
-          
-          <!-- Side Highlight Stripes -->
-          <line x1="8" y1="42" x2="8" y2="94" stroke="${highlightColor}" stroke-width="1.5"/>
-          <line x1="56" y1="42" x2="56" y2="94" stroke="${highlightColor}" stroke-width="1.5"/>
-
-          <!-- Side Windows (Left & Right strips) -->
-          <rect x="9" y="44" width="4" height="48" rx="1.5" fill="#334155"/>
-          <rect x="51" y="44" width="4" height="48" rx="1.5" fill="#334155"/>
-          
-          <!-- Roof Top AC Climate Unit with Louvers -->
-          <rect x="18" y="48" width="28" height="28" rx="4" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
-          <line x1="22" y1="55" x2="42" y2="55" stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>
-          <line x1="22" y1="62" x2="42" y2="62" stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>
-          <line x1="22" y1="69" x2="42" y2="69" stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>
-          
-          <!-- Rear Window & Taillights -->
-          <rect x="14" y="98" width="36" height="4" rx="1.5" fill="#0f172a"/>
-          <rect x="8" y="104" width="6" height="4" rx="1.5" fill="#EF4444"/>
-          <rect x="50" y="104" width="6" height="4" rx="1.5" fill="#EF4444"/>
-          <!-- Rear Bumper -->
-          <rect x="14" y="110" width="36" height="3" rx="1.5" fill="#1e293b"/>
-        </g>
-      </svg>
-    </div>
-  `;
+  const rotation = (typeof bearing === 'number' && !Number.isNaN(bearing)) ? Math.round(bearing) : 0;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 120" width="32" height="60" data-rotation="${rotation}">
+  <defs>
+    <filter id="g" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="${glowColor}" flood-opacity="0.9"/></filter>
+    <linearGradient id="windshield-grad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#E0F2FE"/><stop offset="100%" stop-color="#93C5FD"/></linearGradient>
+  </defs>
+  <g filter="url(#g)">
+    <!-- 4 Side Wheels -->
+    <rect x="2" y="18" width="5" height="18" rx="2" fill="#1e293b"/><rect x="57" y="18" width="5" height="18" rx="2" fill="#1e293b"/>
+    <rect x="2" y="84" width="5" height="18" rx="2" fill="#1e293b"/><rect x="57" y="84" width="5" height="18" rx="2" fill="#1e293b"/>
+    <rect x="6" y="8" width="52" height="104" rx="10" fill="#ffffff" stroke="${strokeColor}" stroke-width="2.2"/>
+    <polygon points="10,8 14,0 22,0 18,8" fill="#FEF08A"/><polygon points="54,8 50,0 42,0 46,8" fill="#FEF08A"/>
+    <rect x="14" y="6" width="36" height="5" rx="2" fill="${glowColor}"/>
+    <rect x="16" y="13" width="32" height="6" rx="1.5" fill="#FACC15"/>
+    <path d="M 12 24 Q 32 18 52 24 L 50 38 L 14 38 Z" fill="url(#windshield-grad)" stroke="#38bdf8" stroke-width="0.8"/>
+    <line x1="8" y1="42" x2="8" y2="94" stroke="${highlightColor}" stroke-width="1.5"/><line x1="56" y1="42" x2="56" y2="94" stroke="${highlightColor}" stroke-width="1.5"/>
+    <rect x="9" y="44" width="4" height="48" rx="1.5" fill="#334155"/><rect x="51" y="44" width="4" height="48" rx="1.5" fill="#334155"/>
+    <!-- Roof Top AC Climate Unit -->
+    <rect x="18" y="48" width="28" height="28" rx="4" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
+    <line x1="22" y1="55" x2="42" y2="55" stroke="#64748b" stroke-width="1.2"/><line x1="22" y1="62" x2="42" y2="62" stroke="#64748b" stroke-width="1.2"/><line x1="22" y1="69" x2="42" y2="69" stroke="#64748b" stroke-width="1.2"/>
+    <rect x="14" y="98" width="36" height="4" rx="1.5" fill="#0f172a"/>
+    <rect x="8" y="104" width="6" height="4" rx="1.5" fill="#EF4444"/><rect x="50" y="104" width="6" height="4" rx="1.5" fill="#EF4444"/>
+  </g>
+</svg>`;
 }
+window.createBusSvg = createBusSvg;
 
-function getBusPopupHtml(b) {
-  const freshnessColor = b.freshness === 'FRESH' ? '#10B981' : (b.freshness === 'AGING' ? '#F59E0B' : '#EF4444');
-  const speedDisplay = (b.speed_kmh !== null && !isNaN(b.speed_kmh)) ? `${b.speed_kmh} km/h` : 'UNKNOWN';
-  const bearingDisplay = (b.bearing !== null && !isNaN(b.bearing)) ? `${Math.round(b.bearing)}°` : 'UNKNOWN';
-  return `
-    <div style="font-size: 12px; font-family: var(--font-sans); min-width: 190px; color: #1e293b;">
-      <div style="font-weight: 800; font-size: 13px; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 6px;">
-        🚍 DTC Bus ${b.vehicle_id}
-      </div>
-      <div><b>Route:</b> ${b.route_id ? 'Route ' + b.route_id : 'DTC Corridor'}</div>
-      <div><b>Trip ID:</b> ${b.trip_id || 'N/A'}</div>
-      <div><b>Speed:</b> ${speedDisplay}</div>
-      <div><b>Bearing:</b> ${bearingDisplay}</div>
-      <div><b>Freshness:</b> <span style="font-weight: 700; color: ${freshnessColor};">${b.freshness}</span> (${b.age_seconds}s ago)</div>
-      <div><b>Provenance:</b> <span style="color: #059669; font-weight: 700;">LIVE</span></div>
-    </div>
-  `;
-}
+/* A set of live buses on the globe. Billboards persist between polls and
+   glide to each new fix (no flicker); zoomed out they show as freshness dots. */
+class BusLayer {
+  constructor(viewer, { alwaysIcons = false } = {}) {
+    this.viewer = viewer;
+    this.alwaysIcons = alwaysIcons;
+    this.billboards = viewer.scene.primitives.add(new Cesium.BillboardCollection({ scene: viewer.scene }));
+    this.dots = alwaysIcons ? null : viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    this.items = new Map();   // vehicle_id -> { bb, dot, from, to, t0 }
+    this.rows = new Map();    // vehicle_id -> latest record
+    this.glideMs = 2500;
+    viewer.scene.preRender.addEventListener(() => this._tick());
+  }
 
-// ==========================================
-// 3. LIVE DTC BUS FEED POLLER & CLUSTERING
-// ==========================================
-async function loadLiveBuses() {
-  const countEl = document.getElementById('live-bus-count');
-  if (countEl) countEl.innerText = 'Polling Live Feed...';
+  set show(v) { this.billboards.show = v; if (this.dots) this.dots.show = v; }
+  get show() { return this.billboards.show; }
 
-  try {
-    let buses = await safeFetchJson('/api/v1/vehicles?limit=3000');
+  clear() {
+    this.billboards.removeAll();
+    if (this.dots) this.dots.removeAll();
+    this.items.clear();
+    this.rows.clear();
+  }
 
-    // If no buses in cache yet, trigger on-demand refresh
-    if (!buses || buses.length === 0) {
-      await fetch('/api/v1/vehicles/refresh', { method: 'POST' });
-      buses = await safeFetchJson('/api/v1/vehicles?limit=3000');
-    }
-
-    if (countEl) countEl.innerText = `${buses.length.toLocaleString()} Active Vehicles`;
-
-    const currentFeedIds = new Set();
-
-    // In-place marker update (does not rebuild 2,500 markers from scratch)
-    buses.forEach(b => {
-      currentFeedIds.add(b.vehicle_id);
-
-      if (state.busMarkers.has(b.vehicle_id)) {
-        // Update existing marker
-        const marker = state.busMarkers.get(b.vehicle_id);
-        marker.setLatLng([b.lat, b.lon]);
-        
-        // Update SVG icon with bearing & freshness
-        const iconHtml = createBusSvg(b.freshness, b.bearing);
-        marker.setIcon(L.divIcon({
-          html: iconHtml,
-          className: 'pulse-bus-marker',
-          iconSize: [32, 60],
-          iconAnchor: [16, 30],
-          popupAnchor: [0, -28]
-        }));
-        marker.setPopupContent(getBusPopupHtml(b));
-      } else {
-        // Create new marker
-        const iconHtml = createBusSvg(b.freshness, b.bearing);
-        const icon = L.divIcon({
-          html: iconHtml,
-          className: 'pulse-bus-marker',
-          iconSize: [32, 60],
-          iconAnchor: [16, 30],
-          popupAnchor: [0, -28]
+  update(rows, layerName = 'live') {
+    const base = state.globe.baseHeight() + 14;
+    const seen = new Set();
+    const now = performance.now();
+    for (const b of rows) {
+      seen.add(b.vehicle_id);
+      this.rows.set(b.vehicle_id, b);
+      const pos = Cesium.Cartesian3.fromDegrees(b.lon, b.lat, base);
+      const f = (b.freshness || 'FRESH').toUpperCase();
+      const css = FRESH_COLORS[f] || FRESH_COLORS.STALE;
+      const rot = (typeof b.bearing === 'number' && !Number.isNaN(b.bearing)) ? -Cesium.Math.toRadians(b.bearing) : 0;
+      const id = { kind: 'bus', vehicle_id: b.vehicle_id, vehicle: b, layer: layerName };
+      let it = this.items.get(b.vehicle_id);
+      if (!it) {
+        const bb = this.billboards.add({
+          position: pos, image: busImage(f), width: 22, height: 41, rotation: rot,
+          alignedAxis: Cesium.Cartesian3.UNIT_Z,
+          scaleByDistance: this.alwaysIcons ? new Cesium.NearFarScalar(600, 1.5, 40000, 0.75) : new Cesium.NearFarScalar(600, 1.3, 9000, 0.6),
+          translucencyByDistance: this.alwaysIcons ? undefined : new Cesium.NearFarScalar(5000, 1.0, 9000, 0.0),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          id,
         });
-
-        const marker = L.marker([b.lat, b.lon], { icon: icon });
-        marker.bindPopup(getBusPopupHtml(b));
-
-        state.clusterGroup.addLayer(marker);
-        state.busMarkers.set(b.vehicle_id, marker);
-      }
-    });
-
-    // Remove expired vehicles no longer in feed
-    for (const [vid, marker] of state.busMarkers.entries()) {
-      if (!currentFeedIds.has(vid)) {
-        state.clusterGroup.removeLayer(marker);
-        state.busMarkers.delete(vid);
+        const dot = this.dots ? this.dots.add({
+          position: pos, pixelSize: 5, color: Cesium.Color.fromCssColorString(css),
+          outlineColor: Cesium.Color.fromCssColorString(css).withAlpha(0.25), outlineWidth: 3,
+          scaleByDistance: new Cesium.NearFarScalar(5000, 1.3, 80000, 0.7),
+          translucencyByDistance: new Cesium.NearFarScalar(5000, 0.0, 9000, 1.0),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY, id,
+        }) : null;
+        it = { bb, dot, from: pos, to: pos, t0: now };
+        this.items.set(b.vehicle_id, it);
+      } else {
+        it.from = it.bb.position;
+        it.to = pos;
+        it.t0 = now;
+        it.bb.image = busImage(f);
+        it.bb.rotation = rot;
+        it.bb.id = id;
+        if (it.dot) { it.dot.color = Cesium.Color.fromCssColorString(css); it.dot.id = id; }
       }
     }
-
-    // Fit bounds on first load if markers exist
-    if (buses.length > 0 && !state._initialLiveFitted) {
-      state._initialLiveFitted = true;
-      state.map.fitBounds(state.clusterGroup.getBounds(), { padding: [30, 30] });
+    for (const [vid, it] of this.items) {
+      if (!seen.has(vid)) {
+        this.billboards.remove(it.bb);
+        if (it.dot) this.dots.remove(it.dot);
+        this.items.delete(vid);
+        this.rows.delete(vid);
+      }
     }
+  }
+
+  /** Move one bus (follow mode) without touching the others. */
+  updateOne(b, layerName = 'live') {
+    const rows = [...this.rows.values()].map((r) => (r.vehicle_id === b.vehicle_id ? b : r));
+    if (!this.rows.has(b.vehicle_id)) rows.push(b);
+    this.update(rows, layerName);
+  }
+
+  position(vid) { const it = this.items.get(vid); return it ? it.bb.position : null; }
+
+  _tick() {
+    const now = performance.now();
+    for (const it of this.items.values()) {
+      if (it.from === it.to) continue;
+      const t = Math.min(1, (now - it.t0) / this.glideMs);
+      const p = Cesium.Cartesian3.lerp(it.from, it.to, t, new Cesium.Cartesian3());
+      it.bb.position = p;
+      if (it.dot) it.dot.position = p;
+      if (t >= 1) it.from = it.to;
+    }
+  }
+}
+
+function routeMatches(b, q) {
+  if (!q) return true;
+  const needle = q.toLowerCase().replace(/\s+/g, '');
+  const name = String(b.route_name || '').toLowerCase().replace(/\s+/g, '');
+  const id = String(b.route_id || '').toLowerCase();
+  // "534" matches 534, 534UP, 534DOWN, 534A… but not 1534.
+  return id === needle || name === needle || (name.startsWith(needle) && !/^\d/.test(name.slice(needle.length)));
+}
+
+function wireLive() {
+  $('#btn-live-refresh').addEventListener('click', () => loadLive(true));
+  let t = null;
+  $('#live-route-filter').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => renderBuses(state.liveRows, true), 200); });
+}
+
+/* Poll faster when zoomed in: every 10 s below ~8 km altitude, else 30 s. */
+function liveLoop() {
+  clearTimeout(state.liveTimer);
+  if (state.mode !== 'live') return;
+  const h = state.globe.viewer.camera.positionCartographic.height;
+  const close = h < 8000;
+  loadLive(close).finally(() => {
+    if (state.mode !== 'live') return;
+    state.liveTimer = setTimeout(liveLoop, (close ? 10 : Math.max(15, CFG.pollIntervalSeconds || 30)) * 1000);
+  });
+}
+
+async function loadLive(fresh = false) {
+  const notice = $('#live-notice');
+  try {
+    const rows = await fetchJson(`/api/v1/vehicles?limit=5000${fresh ? '&fresh=true' : ''}`);
+    state.liveRows = rows;
+    renderBuses(rows);
+    $('#live-updated').textContent = `Updated ${new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata' })} IST`;
+    if (!rows.length) {
+      notice.hidden = false;
+      notice.className = 'notice warn';
+      notice.innerHTML = CFG.liveEnabled
+        ? '<strong>The live feed returned no buses.</strong> The Delhi OTD feed may be down or rate-limited. Nothing is simulated in its place.'
+        : '<strong>Live feed is off.</strong> Set <code>OTD_API_KEY</code> and <code>LIVE_FEED_ENABLED=true</code> in <code>.env</code> to see buses moving. Journey times still use the historical model.';
+    }
+    $('#hud-feed').textContent = rows.length ? `LIVE · ${rows.length.toLocaleString()} BUSES` : (CFG.liveEnabled ? 'NO DATA' : 'OFF · HISTORICAL MODE');
   } catch (err) {
-    console.warn("Live feed poll notice:", err.message);
-    if (countEl) countEl.innerText = 'Feed Offline';
+    notice.hidden = false;
+    notice.className = 'notice error';
+    notice.innerHTML = `<strong>Couldn't reach the live feed.</strong> ${esc(err.message)}. Retrying shortly.`;
   }
 }
 
-// ==========================================
-// 4. MAP CLICK SELECTION & ARBITRARY COORDS
-// ==========================================
-function initMapPickMode() {
-  const btnPickOrig = document.getElementById('btn-pick-origin');
-  const btnPickDest = document.getElementById('btn-pick-dest');
-  const btnCancel = document.getElementById('btn-cancel-pick');
+function renderBuses(rows, filterChanged = false) {
+  if (!state.busLayer) return;
+  const q = $('#live-route-filter').value.trim();
+  const shown = rows.filter((b) => routeMatches(b, q));
+  if (filterChanged) state.busLayer.clear();
+  state.busLayer.update(shown);
+  state.busById = new Map(shown.map((b) => [b.vehicle_id, b]));
+  const counts = { FRESH: 0, AGING: 0, STALE: 0 };
+  shown.forEach((b) => { const f = (b.freshness || 'FRESH').toUpperCase(); counts[f] = (counts[f] || 0) + 1; });
+  $('#live-count').textContent = shown.length.toLocaleString();
+  $('#live-fresh').textContent = counts.FRESH.toLocaleString();
+  $('#live-aging').textContent = counts.AGING.toLocaleString();
+  $('#live-stale').textContent = counts.STALE.toLocaleString();
+  const notice = $('#live-notice');
+  if (q && rows.length && !shown.length) {
+    notice.hidden = false; notice.className = 'notice warn';
+    notice.innerHTML = `No bus on route <strong>${esc(q)}</strong> is reporting right now. Use the number on the bus, e.g. <code>534</code> or <code>0114(NS)UP</code>.`;
+  } else if (rows.length) {
+    notice.hidden = true;
+  }
+  if (filterChanged && q && shown.length) {
+    state.globe.flyToPositions(shown.map((b) => [b.lat, b.lon]), { pitch: -55, padding: 1.3, duration: 1.6, avoidPanel: true });
+    toast(`${shown.length} bus${shown.length > 1 ? 'es' : ''} on route ${q}`);
+  }
+}
 
-  if (btnPickOrig) {
-    btnPickOrig.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (state.pickMode === 'origin') cancelPickMode();
-      else startPickMode('origin');
+function busCard(b, following) {
+  const f = (b.freshness || '').toUpperCase();
+  const fc = f === 'FRESH' ? 'var(--fresh)' : (f === 'AGING' ? 'var(--aging)' : 'var(--stale)');
+  return `
+    <div class="insp-kicker">DTC BUS · LIVE${following ? ' · FOLLOWING' : ''}</div>
+    <div class="insp-title">${esc(b.route_name || b.route_id || 'Bus')} <span class="muted small">${esc(b.vehicle_id)}</span></div>
+    <dl class="kv">
+      <dt>Route</dt><dd>${esc(b.route_name || '–')} <span class="muted small">(id ${esc(b.route_id || '–')})</span></dd>
+      <dt>Trip</dt><dd>${esc(b.trip_id || '–')}</dd>
+      <dt>Speed</dt><dd>${b.speed_kmh != null ? `${b.speed_kmh} km/h` : 'unknown'}</dd>
+      <dt>Heading</dt><dd>${typeof b.bearing === 'number' ? `${Math.round(b.bearing)}°` : 'unknown'}</dd>
+      <dt>Fix age</dt><dd style="color:${fc}" id="insp-age">${esc(f)} · ${b.age_seconds ?? '–'} s</dd>
+      <dt>Position</dt><dd id="insp-pos">${Number(b.lat).toFixed(5)}, ${Number(b.lon).toFixed(5)}</dd>
+    </dl>
+    <div class="insp-actions">${following
+      ? '<button class="btn-ghost active" id="insp-follow"><span class="material-symbols-outlined">pause_circle</span>Stop following</button>'
+      : '<button class="btn-ghost" id="insp-follow"><span class="material-symbols-outlined">my_location</span>Zoom &amp; follow</button>'}</div>
+    ${following ? '<p class="small muted" style="margin-top:8px">Checking for a new fix every 3 s; the feed itself updates every ~10–30 s.</p>' : ''}`;
+}
+
+function showBus(b) {
+  if (!b) return;
+  openInspector(busCard(b, state.follow === b.vehicle_id));
+  $('#insp-follow').onclick = () => (state.follow === b.vehicle_id ? (stopFollow(), showBus(b)) : startFollow(b));
+}
+
+/* Follow one bus: fly to it, keep the camera on it, and refresh its fix as
+   fast as the feed allows (server polls at most every 8 s). */
+function startFollow(b) {
+  const layer = state.mode === 'journey' ? state.routeBusLayer : state.busLayer;
+  stopFollow();
+  state.follow = b.vehicle_id;
+  state.followLayer = layer;
+  openInspector(busCard(b, true));
+  $('#insp-follow').onclick = () => { stopFollow(); showBus(b); };
+  state.globe.flyToPositions([[b.lat, b.lon]], { pitch: -50, padding: 0.35, duration: 1.6 });
+  const tick = async () => {
+    if (!state.follow) return;
+    try {
+      const nb = await fetchJson(`/api/v1/vehicles/${encodeURIComponent(state.follow)}`);
+      const before = layer.position(nb.vehicle_id);
+      layer.updateOne(nb, layer === state.routeBusLayer ? 'route' : 'live');
+      const age = $('#insp-age'); const pos = $('#insp-pos');
+      if (age) age.textContent = `${nb.freshness} · ${nb.age_seconds} s`;
+      if (pos) pos.textContent = `${Number(nb.lat).toFixed(5)}, ${Number(nb.lon).toFixed(5)}`;
+      if (before) state.followAnchor = before;
+    } catch (e) {
+      toast('This bus has left the live feed');
+      stopFollow();
+    }
+  };
+  tick();
+  state.followTimer = setInterval(tick, 3000);
+  // Keep the camera locked on the gliding bus.
+  if (!state.followListener) {
+    state.followListener = state.globe.viewer.scene.preRender.addEventListener(() => {
+      if (!state.follow || !state.followLayer || state.globe.viewer.camera._currentFlight) return;
+      const p = state.followLayer.position(state.follow);
+      if (!p) return;
+      if (state.followLast) {
+        const d = Cesium.Cartesian3.subtract(p, state.followLast, new Cesium.Cartesian3());
+        if (Cesium.Cartesian3.magnitude(d) > 0.01 && Cesium.Cartesian3.magnitude(d) < 2000) {
+          const cam = state.globe.viewer.camera;
+          cam.setView({
+            destination: Cesium.Cartesian3.add(cam.positionWC, d, new Cesium.Cartesian3()),
+            orientation: { heading: cam.heading, pitch: cam.pitch, roll: cam.roll },
+          });
+        }
+      }
+      state.followLast = Cesium.Cartesian3.clone(p);
     });
   }
-  if (btnPickDest) {
-    btnPickDest.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (state.pickMode === 'destination') cancelPickMode();
-      else startPickMode('destination');
-    });
-  }
-  if (btnCancel) {
-    btnCancel.addEventListener('click', (e) => {
-      e.preventDefault();
-      cancelPickMode();
-    });
-  }
+  state.followLast = null;
 }
 
-function startPickMode(target) {
-  state.pickMode = target; // 'origin' or 'destination'
-  const banner = document.getElementById('map-selection-banner');
-  const text = document.getElementById('map-selection-text');
-  const btnOrig = document.getElementById('btn-pick-origin');
-  const btnDest = document.getElementById('btn-pick-dest');
-
-  if (target === 'origin') {
-    if (btnOrig) btnOrig.classList.add('active');
-    if (btnDest) btnDest.classList.remove('active');
-    if (text) text.innerText = '📍 PICK ORIGIN: Click anywhere on the map to select your starting point.';
-  } else {
-    if (btnDest) btnDest.classList.add('active');
-    if (btnOrig) btnOrig.classList.remove('active');
-    if (text) text.innerText = '📍 PICK DESTINATION: Click anywhere on the map to select your destination.';
-  }
-  if (banner) banner.style.display = 'flex';
-  if (state.map) state.map.getContainer().style.cursor = 'crosshair';
+function stopFollow() {
+  clearInterval(state.followTimer);
+  state.followTimer = null;
+  state.follow = null;
+  state.followLast = null;
 }
 
-function cancelPickMode() {
-  state.pickMode = null;
-  const banner = document.getElementById('map-selection-banner');
-  if (banner) banner.style.display = 'none';
-  const btnOrig = document.getElementById('btn-pick-origin');
-  const btnDest = document.getElementById('btn-pick-dest');
-  if (btnOrig) btnOrig.classList.remove('active');
-  if (btnDest) btnDest.classList.remove('active');
-  if (state.map) state.map.getContainer().style.cursor = '';
+/* Live buses of the routes in the selected journey (journey mode). */
+function journeyRouteIds() {
+  const opt = state.journeyData?.options?.[state.selectedOption];
+  return opt ? [...new Set((opt.legs || []).filter((l) => l.type === 'BUS').map((l) => String(l.route_id)))] : [];
 }
 
-function onMapClick(e) {
-  const { lat, lng } = e.latlng;
-  const latNum = parseFloat(lat.toFixed(5));
-  const lonNum = parseFloat(lng.toFixed(5));
-  const coordStr = `${latNum.toFixed(4)}, ${lonNum.toFixed(4)}`;
-
-  if (state.pickMode === 'origin') {
-    setOrigin(coordStr, latNum, lonNum);
-    cancelPickMode();
-    return;
-  } else if (state.pickMode === 'destination' || state.pickMode === 'dest') {
-    setDestination(coordStr, latNum, lonNum);
-    cancelPickMode();
-    return;
-  }
-
-  // If not in pick mode, show mini context popup on Journey Planner
-  if (state.currentView === 'journey') {
-    const popupContent = `
-      <div class="map-context-popup">
-        <div style="font-weight: 700; margin-bottom: 4px;">📍 Selected Location</div>
-        <div style="color: #64748b; font-size: 11px; margin-bottom: 8px;">${coordStr}</div>
-        <div style="display: flex; gap: 6px;">
-          <button onclick="setOrigin('${coordStr}', ${latNum}, ${lonNum}); state.map.closePopup();" class="btn-popup btn-popup-green">🟢 Set Origin</button>
-          <button onclick="setDestination('${coordStr}', ${latNum}, ${lonNum}); state.map.closePopup();" class="btn-popup btn-popup-red">🔴 Set Destination</button>
-        </div>
-      </div>
-    `;
-    L.popup().setLatLng(e.latlng).setContent(popupContent).openOn(state.map);
-  }
+async function loadRouteBuses() {
+  const ids = journeyRouteIds();
+  if (!ids.length || state.mode !== 'journey') return;
+  try {
+    const lists = await Promise.all(ids.map((r) => fetchJson(`/api/v1/vehicles?route_id=${encodeURIComponent(r)}&limit=500&fresh=true`)));
+    const rows = lists.flat();
+    state.routeBusLayer.update(rows, 'route');
+    const opt = state.journeyData?.options?.[state.selectedOption];
+    const el = document.querySelector(`.journey-card[data-i="${state.selectedOption}"] .route-buses`);
+    if (el && opt) {
+      const parts = (opt.legs || []).filter((l) => l.type === 'BUS').map((l) => {
+        const mine = rows.filter((b) => String(b.route_id) === String(l.route_id));
+        if (!mine.length) return `<span><strong>${esc(l.route_name)}</strong>: no bus reporting now</span>`;
+        const near = mine.map((b) => ({ b, d: haversineKm(b.lat, b.lon, l.boarding_lat, l.boarding_lon) })).sort((a, c) => a.d - c.d)[0];
+        return `<span><strong>${esc(l.route_name)}</strong>: ${mine.length} bus${mine.length > 1 ? 'es' : ''} live · nearest ${near.d.toFixed(1)} km from ${esc(l.boarding_stop)}</span>`;
+      });
+      el.innerHTML = `<span class="material-symbols-outlined">directions_bus</span><div>${parts.join('<br>')}</div>`;
+      el.hidden = false;
+    }
+  } catch (e) { console.warn('route buses', e); }
 }
 
-window.setOrigin = function(name, lat, lon) {
-  const input = document.getElementById('input-origin');
-  if (input) input.value = name;
-  state.originCoords = { lat, lon, name };
+function startRouteBuses() {
+  stopRouteBuses();
+  state.routeBusLayer.clear();
+  loadRouteBuses();
+  state.routeBusTimer = setInterval(loadRouteBuses, 10000);
+}
+function stopRouteBuses() { clearInterval(state.routeBusTimer); state.routeBusTimer = null; }
 
-  if (state.originPinMarker) state.originDestLayer.removeLayer(state.originPinMarker);
-  if (typeof lat === 'number' && typeof lon === 'number') {
-    state.originPinMarker = L.marker([lat, lon], {
-      icon: L.divIcon({
-        className: 'pulse-pin-marker',
-        html: `<div class="pulse-pin pin-origin" title="Selected Origin"><span class="pulse-pin-dot"></span></div>`,
-        iconSize: [24, 24],
-        iconAnchor: [12, 24],
-        popupAnchor: [0, -24]
-      })
-    }).bindPopup(`<b>Selected Origin:</b><br/>${name}`).addTo(state.originDestLayer);
-  }
-};
+function haversineKm(la1, lo1, la2, lo2) {
+  const r = Math.PI / 180;
+  const a = Math.sin(((la2 - la1) * r) / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(((lo2 - lo1) * r) / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(a));
+}
 
-window.setDestination = function(name, lat, lon) {
-  const input = document.getElementById('input-dest');
-  if (input) input.value = name;
-  state.destCoords = { lat, lon, name };
-
-  if (state.destPinMarker) state.originDestLayer.removeLayer(state.destPinMarker);
-  if (typeof lat === 'number' && typeof lon === 'number') {
-    state.destPinMarker = L.marker([lat, lon], {
-      icon: L.divIcon({
-        className: 'pulse-pin-marker',
-        html: `<div class="pulse-pin pin-dest" title="Selected Destination"><span class="pulse-pin-dot"></span></div>`,
-        iconSize: [24, 24],
-        iconAnchor: [12, 24],
-        popupAnchor: [0, -24]
-      })
-    }).bindPopup(`<b>Selected Destination:</b><br/>${name}`).addTo(state.originDestLayer);
-  }
-};
-
-// ==========================================
-// 5. AUTOCOMPLETE FOR ALL DELHI STOPS & PLACES
-// ==========================================
-function initAutocomplete() {
-  setupAutocomplete('input-origin', 'origin-suggestions', (item) => {
-    setOrigin(item.name, item.lat, item.lon);
+/* ── CONGESTION ──────────────────────────────────────────── */
+function wireCongestion() {
+  const slider = $('#cg-hour');
+  slider.addEventListener('input', () => { state.cgHour = Number(slider.value); updateClock(); debounceCongestion(); });
+  $$('.seg[data-weekend]').forEach((b) => b.addEventListener('click', () => {
+    $$('.seg[data-weekend]').forEach((x) => x.classList.toggle('active', x === b));
+    state.cgWeekend = Number(b.dataset.weekend);
+    loadCongestion();
+  }));
+  $('#btn-cg-play').addEventListener('click', () => (state.cgPlayTimer ? stopPlay() : startPlay()));
+  $('#btn-cg-extrude').addEventListener('click', () => {
+    state.cgExtrude = !state.cgExtrude;
+    $('#btn-cg-extrude').classList.toggle('active', state.cgExtrude);
+    $('#btn-cg-extrude').setAttribute('aria-pressed', String(state.cgExtrude));
+    if (state.congestionWalls) state.congestionWalls.show = state.cgExtrude;
+    if (state.cgExtrude && Cesium.Math.toDegrees(state.globe.viewer.camera.pitch) < -75) state.globe.toggleTilt();
   });
-  setupAutocomplete('input-dest', 'dest-suggestions', (item) => {
-    setDestination(item.name, item.lat, item.lon);
-  });
+  updateClock();
 }
 
-function setupAutocomplete(inputId, dropdownId, onSelect) {
-  const input = document.getElementById(inputId);
-  const dropdown = document.getElementById(dropdownId);
-  if (!input || !dropdown) return;
+let cgDebounce = null;
+function debounceCongestion() { clearTimeout(cgDebounce); cgDebounce = setTimeout(loadCongestion, 120); }
 
-  let debounceTimer = null;
+function bandLabel(h) {
+  if (h >= 7 && h <= 10) return 'AM PEAK';
+  if (h >= 17 && h <= 20) return 'PM PEAK';
+  if (h >= 23 || h <= 5) return 'NIGHT';
+  return 'OFF-PEAK';
+}
+function updateClock() {
+  $('#cg-clock').textContent = `${String(state.cgHour).padStart(2, '0')}:00`;
+  $('#cg-badge').textContent = bandLabel(state.cgHour);
+  $('#cg-hour').value = state.cgHour;
+  $$('.spark-bar').forEach((b) => b.classList.toggle('active', Number(b.dataset.h) === state.cgHour));
+}
 
-  input.addEventListener('input', () => {
-    const val = input.value.trim();
-    clearTimeout(debounceTimer);
+function startPlay() {
+  $('#btn-cg-play').innerHTML = '<span class="material-symbols-outlined">pause</span>Pause';
+  state.cgPlayTimer = setInterval(() => { state.cgHour = (state.cgHour + 1) % 24; updateClock(); loadCongestion(); }, 1700);
+}
+function stopPlay() {
+  clearInterval(state.cgPlayTimer); state.cgPlayTimer = null;
+  const b = $('#btn-cg-play');
+  if (b) b.innerHTML = '<span class="material-symbols-outlined">play_arrow</span>Play day';
+}
 
-    if (val.length < 2) {
-      dropdown.style.display = 'none';
-      dropdown.innerHTML = '';
+function ciColor(ci) {
+  // 1.0 = the stretch's own free-flow time (its fastest typical hour) → 3.0× jammed
+  const stops = [[1.0, [34, 211, 138]], [1.4, [198, 232, 59]], [1.8, [245, 177, 61]], [2.3, [255, 90, 95]], [3.0, [176, 21, 74]]];
+  if (ci <= stops[0][0]) return stops[0][1];
+  for (let i = 1; i < stops.length; i++) {
+    if (ci <= stops[i][0]) {
+      const [a, ca] = stops[i - 1]; const [b, cb] = stops[i];
+      const t = (ci - a) / (b - a);
+      return ca.map((v, k) => Math.round(v + (cb[k] - v) * t));
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+async function loadCongestion() {
+  const key = `${state.cgHour}:${state.cgWeekend}`;
+  const notice = $('#cg-notice');
+  let data = state.congestionCache.get(key);
+  if (!data) {
+    try {
+      data = await fetchJson(`/api/v1/analytics/congestion?hour=${state.cgHour}&is_weekend=${state.cgWeekend}`);
+      state.congestionCache.set(key, data);
+    } catch (err) {
+      notice.hidden = false; notice.className = 'notice error';
+      notice.innerHTML = `<strong>Couldn't load the traffic layer.</strong> ${esc(err.message)}`;
       return;
     }
-
-    debounceTimer = setTimeout(async () => {
-      try {
-        const data = await safeFetchJson(`/api/v1/places/autocomplete?q=${encodeURIComponent(val)}&limit=8`);
-        renderSuggestions(dropdown, data.suggestions || [], onSelect);
-      } catch (err) {
-        console.warn("Autocomplete notice:", err.message);
-      }
-    }, 220);
-  });
-
-  // Close dropdown when clicking outside
-  document.addEventListener('click', (e) => {
-    if (!input.contains(e.target) && !dropdown.contains(e.target)) {
-      dropdown.style.display = 'none';
-    }
-  });
-
-  input.addEventListener('focus', () => {
-    if (dropdown.children.length > 0 && input.value.trim().length >= 2) {
-      dropdown.style.display = 'block';
-    }
-  });
-
-  input.addEventListener('blur', () => {
-    setTimeout(() => {
-      dropdown.style.display = 'none';
-    }, 250);
-  });
-
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' || e.key === 'Enter') {
-      dropdown.style.display = 'none';
-    }
-  });
-}
-
-function renderSuggestions(dropdown, items, onSelect) {
-  dropdown.innerHTML = '';
-  if (!items || items.length === 0) {
-    dropdown.style.display = 'none';
+  }
+  if (key !== `${state.cgHour}:${state.cgWeekend}` || state.mode !== 'congestion') return;
+  if (data.status !== 'OK') {
+    notice.hidden = false; notice.className = 'notice warn';
+    notice.innerHTML = '<strong>The traffic model is not trained yet.</strong> Run <code>python scripts/build_traffic_model.py all</code> to build it from the GPS archive.';
     return;
   }
-
-  items.forEach(item => {
-    const div = document.createElement('div');
-    div.className = 'suggestion-item';
-
-    const icon = item.type === 'STOP' ? '🚏' : (item.type === 'COORDINATE' ? '🌐' : '📍');
-    const badgeText = item.type === 'STOP' ? 'DTC STOP' : (item.type === 'COORDINATE' ? 'COORDINATES' : 'PLACE');
-
-    div.innerHTML = `
-      <div class="suggestion-icon">${icon}</div>
-      <div class="suggestion-content">
-        <div class="suggestion-name">${item.name}</div>
-        <div class="suggestion-sub">${item.formatted_address || ''}</div>
-      </div>
-      <div class="suggestion-badge">${badgeText}</div>
-    `;
-
-    div.addEventListener('click', () => {
-      onSelect(item);
-      dropdown.style.display = 'none';
-    });
-
-    dropdown.appendChild(div);
-  });
-
-  dropdown.style.display = 'block';
+  notice.hidden = true;
+  drawCongestion(data);
+  const s = data.summary || {};
+  $('#cg-count').textContent = (s.stretches ?? 0).toLocaleString();
+  $('#cg-speed').textContent = s.median_speed_kmh != null ? `${s.median_speed_kmh} km/h` : '–';
+  $('#cg-slow').textContent = s.share_slowed_2x != null ? `${Math.round(s.share_slowed_2x * 100)}%` : '–';
+  $('#cg-measured').textContent = s.share_measured != null ? `${Math.round(s.share_measured * 100)}%` : '–';
+  renderSpark(data.network_speed_kmh_by_hour || []);
 }
 
-// ==========================================
-// 6. NAVIGATION TABS & VIEW SWITCHER
-// ==========================================
-function initNavigation() {
-  const tabs = document.querySelectorAll('.nav-tab');
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      const targetView = tab.dataset.view;
-      switchView(targetView);
-    });
-  });
-}
-
-function switchView(viewName) {
-  state.currentView = viewName;
-  document.querySelectorAll('.nav-tab').forEach(t => {
-    t.classList.toggle('active', t.dataset.view === viewName);
-  });
-  document.querySelectorAll('.view-pane').forEach(p => {
-    p.classList.toggle('active', p.id === `view-${viewName}`);
-  });
-
-  cancelPickMode();
-
-  // Handle map layer visibility between views
-  if (viewName === 'journey') {
-    if (state.map && !state.map.hasLayer(state.routeLayer)) {
-      state.map.addLayer(state.routeLayer);
-    }
-    if (state.map && !state.map.hasLayer(state.originDestLayer)) {
-      state.map.addLayer(state.originDestLayer);
-    }
-    if (state.map && state.map.hasLayer(state.clusterGroup)) {
-      state.map.removeLayer(state.clusterGroup);
-    }
-    if (state.pollTimer) {
-      clearInterval(state.pollTimer);
-      state.pollTimer = null;
-    }
-  } else if (viewName === 'live') {
-    if (state.map && !state.map.hasLayer(state.clusterGroup)) {
-      state.map.addLayer(state.clusterGroup);
-    }
-    if (state.map && state.map.hasLayer(state.routeLayer)) {
-      state.map.removeLayer(state.routeLayer);
-    }
-    if (state.map && state.map.hasLayer(state.originDestLayer)) {
-      state.map.removeLayer(state.originDestLayer);
-    }
-    loadLiveBuses();
-    if (!state.pollTimer) {
-      state.pollTimer = setInterval(loadLiveBuses, 30000);
-    }
-  } else {
-    // Hidden on full-screen views
-    if (state.pollTimer) {
-      clearInterval(state.pollTimer);
-      state.pollTimer = null;
-    }
-    if (viewName === 'validation') {
-      loadValidationLab();
-    } else if (viewName === 'command') {
-      loadCommandStatus();
+function drawCongestion(data) {
+  const scene = state.globe.viewer.scene;
+  if (state.congestionPrim) { scene.groundPrimitives.remove(state.congestionPrim); state.congestionPrim = null; }
+  if (state.congestionWalls) { scene.primitives.remove(state.congestionWalls); state.congestionWalls = null; }
+  const instances = [];
+  const walls = [];
+  const base = state.globe.baseHeight();
+  for (const f of data.features) {
+    const [la0, lo0, la1, lo1, ci] = f;
+    if (la0 === la1 && lo0 === lo1) continue;
+    const [r, g, b] = ciColor(ci);
+    instances.push(new Cesium.GeometryInstance({
+      geometry: new Cesium.GroundPolylineGeometry({
+        positions: Cesium.Cartesian3.fromDegreesArray([lo0, la0, lo1, la1]),
+        width: ci >= 2 ? 4.5 : 3.2,
+      }),
+      attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(new Cesium.Color(r / 255, g / 255, b / 255, 0.92)) },
+    }));
+    if (ci >= 2.0) {
+      const h = Math.min(700, (ci - 1.8) * 420);
+      walls.push(new Cesium.GeometryInstance({
+        geometry: new Cesium.WallGeometry({
+          positions: Cesium.Cartesian3.fromDegreesArray([lo0, la0, lo1, la1]),
+          minimumHeights: [base, base],
+          maximumHeights: [base + h, base + h],
+        }),
+        attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(new Cesium.Color(r / 255, g / 255, b / 255, 0.3)) },
+      }));
     }
   }
-
-  // Handle Map Resizing
-  setTimeout(() => {
-    if (state.map) state.map.invalidateSize();
-  }, 200);
-}
-
-// ==========================================
-// 7. JOURNEY PLANNER & TRUE GTFS SHAPE DRAWING
-// ==========================================
-function initJourneyForm() {
-  const form = document.getElementById('journey-form');
-  const swapBtn = document.getElementById('swap-locations-btn');
-  const origInput = document.getElementById('input-origin');
-  const destInput = document.getElementById('input-dest');
-  const timeInput = document.getElementById('input-time');
-
-  // Preset time buttons
-  document.querySelectorAll('.preset-pill').forEach(pill => {
-    pill.addEventListener('click', () => {
-      document.querySelectorAll('.preset-pill').forEach(p => p.classList.remove('active'));
-      pill.classList.add('active');
-      timeInput.value = pill.dataset.time;
-    });
-  });
-
-  if (swapBtn) {
-    swapBtn.addEventListener('click', () => {
-      const tmp = origInput.value;
-      origInput.value = destInput.value;
-      destInput.value = tmp;
-    });
-  }
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const from = origInput.value.trim();
-    const to = destInput.value.trim();
-    const timeVal = timeInput.value.trim();
-
-    if (!from || !to) return;
-
-    // Close any open autocomplete suggestion dropdowns
-    const origDrop = document.getElementById('origin-suggestions');
-    const destDrop = document.getElementById('dest-suggestions');
-    if (origDrop) origDrop.style.display = 'none';
-    if (destDrop) destDrop.style.display = 'none';
-
-    // Abort previous pending query if active
-    if (state.searchAbortController) {
-      state.searchAbortController.abort();
-    }
-    state.searchAbortController = new AbortController();
-
-    // Atomically clear route layer before new query begins
-    state.routeLayer.clearLayers();
-    showLoadingState(true);
-
-    try {
-      const url = `/api/v1/journeys?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&depart_at=${encodeURIComponent(timeVal)}`;
-      const data = await safeFetchJson(url, { signal: state.searchAbortController.signal });
-      renderJourneyResults(data);
-    } catch (err) {
-      if (err.name === 'AbortError') return;
-      renderJourneyError(err.message);
-    } finally {
-      showLoadingState(false);
-    }
-  });
-}
-
-function showLoadingState(isLoading) {
-  const btn = document.getElementById('plan-submit-btn');
-  if (isLoading) {
-    btn.innerHTML = '<span class="pulse-dot"></span> Calculating Model Travel Times...';
-    btn.disabled = true;
-  } else {
-    btn.innerHTML = '<span>⚡</span> Plan Optimal Journey';
-    btn.disabled = false;
+  if (!instances.length) return;
+  state.congestionPrim = scene.groundPrimitives.add(new Cesium.GroundPolylinePrimitive({
+    geometryInstances: instances,
+    appearance: new Cesium.PolylineColorAppearance(),
+    classificationType: Cesium.ClassificationType.BOTH,
+    asynchronous: true,
+  }));
+  state.congestionPrim.show = state.mode === 'congestion';
+  if (walls.length) {
+    state.congestionWalls = scene.primitives.add(new Cesium.Primitive({
+      geometryInstances: walls,
+      appearance: new Cesium.PerInstanceColorAppearance({ translucent: true, flat: true }),
+      asynchronous: true,
+    }));
+    state.congestionWalls.show = state.mode === 'congestion' && state.cgExtrude;
   }
 }
 
-function renderJourneyError(errorMsg) {
-  const container = document.getElementById('journey-results-list');
-  container.innerHTML = `
-    <div class="empty-state" style="padding: 24px; text-align: center; border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 12px; background: rgba(239, 68, 68, 0.05); margin-top: 12px;">
-      <div style="font-size: 24px; margin-bottom: 8px;">⚠️</div>
-      <div style="font-weight: 700; color: #ef4444; font-size: 14px;">Journey Notice</div>
-      <p style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">${errorMsg}</p>
-      <p style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">Try selecting from autocomplete suggestions or click the map to set exact coordinates.</p>
+function renderSpark(speeds) {
+  const box = $('#cg-spark');
+  if (!speeds.length) { box.innerHTML = ''; return; }
+  const max = Math.max(...speeds); const min = Math.min(...speeds);
+  box.innerHTML = speeds.map((v, h) => {
+    const pct = 18 + ((v - min) / Math.max(max - min, 0.1)) * 82;
+    return `<div class="spark-bar${h === state.cgHour ? ' active' : ''}" data-h="${h}" style="height:${pct}%" title="${String(h).padStart(2, '0')}:00 · ${v} km/h"></div>`;
+  }).join('');
+  if (!box.nextElementSibling || !box.nextElementSibling.classList.contains('spark-axis')) {
+    box.insertAdjacentHTML('afterend', '<div class="spark-axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>');
+  }
+  box.querySelectorAll('.spark-bar').forEach((b) => b.addEventListener('click', () => { state.cgHour = Number(b.dataset.h); updateClock(); loadCongestion(); }));
+}
+
+/* ── VALIDATION ──────────────────────────────────────────── */
+async function loadValidation() {
+  const body = $('#validation-body');
+  let d;
+  try {
+    d = await fetchJson('/api/v1/validation/summary');
+  } catch (err) {
+    body.innerHTML = `<div class="notice error"><strong>Couldn't load validation results.</strong> ${esc(err.message)}</div>`;
+    return;
+  }
+  if (d.status !== 'OK') {
+    body.innerHTML = `<div class="notice warn"><strong>Validation has not been run yet.</strong><br>Build the model and score it on held-out days:<br><code>python scripts/build_traffic_model.py all</code><br>Results appear here; no number on this page is typed by hand.</div>`;
+    return;
+  }
+  const o = d.overall;
+  const rows = [
+    ['PULSE model', o.pulse, ''],
+    ['Flat avg speed', o.flat_speed, 'base'],
+    ['GTFS timetable', o.timetable, 'base'],
+  ];
+  const g = d.google || {};
+  const maxMae = Math.max(...rows.map((r) => r[1]?.mae_min || 0), 1);
+  const bars = rows.map(([name, m, cls]) => (m && m.n ? `
+    <div class="v-bar-row"><span>${name}</span>
+      <div class="v-bar-track"><div class="v-bar-fill ${cls}" style="width:${(m.mae_min / maxMae) * 100}%"></div></div>
+      <span class="v-num">${m.mae_min} min</span></div>` : `
+    <div class="v-bar-row"><span>${name}</span><div class="v-bar-track"></div><span class="v-num muted">n/a</span></div>`)).join('');
+  const bands = Object.entries(d.by_time_band || {}).map(([k, v]) => `
+    <tr><td>${esc(k)}</td><td class="num">${(v.pulse.n || 0).toLocaleString()}</td><td class="num">${v.pulse.mae_min ?? '–'}</td><td class="num">${v.flat_speed.mae_min ?? '–'}</td><td class="num">${v.timetable.mae_min ?? '–'}</td></tr>`).join('');
+  const ex = (d.examples || []).slice(0, 8).map((e) => `
+    <tr><td>${esc(e.route_id)}</td><td>${esc(e.depart_ist)}</td><td class="num">${e.distance_km}</td><td class="num">${e.actual_min}</td><td class="num">${e.pulse_min}</td><td class="num">${e.timetable_min ?? '–'}</td></tr>`).join('');
+  const googleBlock = g.status === 'OK'
+    ? `<div class="card-label">PULSE vs Google Maps (door to door)</div>
+       <div class="stat-grid">
+         <div class="stat"><span class="stat-label">Mean |diff|</span><span class="stat-value">${g.mean_abs_diff_min} min</span><span class="stat-sub">${g.n_comparable} comparable queries</span></div>
+         <div class="stat"><span class="stat-label">Within ±20%</span><span class="stat-value">${g.within_20pct_of_google_pct}%</span><span class="stat-sub">median ratio ${g.median_ratio_pulse_over_google}×</span></div>
+       </div>
+       <p class="small muted">${g.google_unavailable} queries had no Google bus route and are excluded, not guessed. Run ${esc(String(g.generated_at || '').slice(0, 10))}.</p>`
+    : '<div class="notice small"><strong>Google Maps comparison not run.</strong> <code>scripts/compare_google.py</code> queries the Google Routes API (transit) with your key; until then this column stays empty instead of showing a guess.</div>';
+  body.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><span class="stat-label">PULSE MAE</span><span class="stat-value">${o.pulse.mae_min} min</span><span class="stat-sub">median ${o.pulse.median_abs_err_min} min</span></div>
+      <div class="stat"><span class="stat-label">Within ±20%</span><span class="stat-value">${o.pulse.within_20pct_pct}%</span><span class="stat-sub">±5 min: ${o.pulse.within_5min_pct}%</span></div>
+      <div class="stat"><span class="stat-label">Held-out runs</span><span class="stat-value">${d.n_runs.toLocaleString()}</span><span class="stat-sub">days ${d.method.test_days[0]}–${d.method.test_days.at(-1)} Oct</span></div>
+      <div class="stat"><span class="stat-label">Range hit rate</span><span class="stat-value">${o.pulse.interval_coverage_pct ?? '–'}%</span><span class="stat-sub">actual inside predicted range</span></div>
     </div>
-  `;
+    <div class="card-label">Mean absolute error (lower is better)</div>
+    <div class="v-bars">${bars}</div>
+    <p class="small muted">Timetable matched ${d.timetable_match_pct}% of runs; on those same runs PULSE MAE is ${o.pulse_on_timetable_subset.mae_min ?? '–'} min. Bias ${o.pulse.bias_min > 0 ? '+' : ''}${o.pulse.bias_min} min.</p>
+    <div class="card-label" style="margin-top:14px">By time of day · MAE (min)</div>
+    <table class="v-table"><thead><tr><th>Band</th><th>Runs</th><th>PULSE</th><th>Flat</th><th>Timetable</th></tr></thead><tbody>${bands}</tbody></table>
+    <div class="card-label">Sample held-out runs (min)</div>
+    <table class="v-table"><thead><tr><th>Route</th><th>Dep</th><th>km</th><th>Actual</th><th>PULSE</th><th>Sched</th></tr></thead><tbody>${ex}</tbody></table>
+    ${googleBlock}
+    <p class="small muted" style="margin-top:10px">Model trained on days ${d.method.train_days?.[0]}–${d.method.train_days?.at(-1)}; ${d.method.model_coverage_measured_cells_pct}% of stretch×time cells are direct measurements. Full method in <code>docs/VALIDATION_REPORT.md</code>.</p>`;
 }
 
-function renderJourneyResults(data) {
-  const container = document.getElementById('journey-results-list');
-  container.innerHTML = '';
-  state.routeLayer.clearLayers();
-
-  if (data.status !== 'SUCCESS' || !data.options || data.options.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state" style="padding: 24px; text-align: center; color: var(--text-muted);">
-        <p>No bus connection found for this query.</p>
-        <p style="font-size: 11px; margin-top: 4px;">Try searching for major stops like "Kashmere Gate", "Nehru Place", or enter coordinates.</p>
-      </div>
-    `;
-    return;
-  }
-
-  // Render Comparative Intelligence Banner
-  if (data.off_peak_comparison) {
-    const comp = data.off_peak_comparison;
-    const banner = document.createElement('div');
-    banner.className = 'comparative-banner';
-    banner.innerHTML = `
-      <div class="banner-icon">💡</div>
-      <div class="banner-text">
-        <h4>Spatiotemporal Traffic Insight</h4>
-        <p>${comp.insight} (Travel time drops from <strong>${comp.peak_duration_minutes}m</strong> to <strong>${comp.off_peak_duration_minutes}m</strong>).</p>
-      </div>
-    `;
-    container.appendChild(banner);
-  }
-
-  // Render Journey Cards
-  data.options.forEach((opt, idx) => {
-    const card = document.createElement('div');
-    card.className = `journey-card ${idx === 0 ? 'selected' : ''}`;
-    
-    let legSummaryHtml = '';
-    opt.legs.forEach(leg => {
-      if (leg.type === 'BUS') {
-        legSummaryHtml += `
-          <div class="timeline-leg">
-            <span class="timeline-dot bus"></span>
-            <span>Take <strong>${leg.route_name}</strong> to <em>${leg.alighting_stop}</em> (${leg.predicted_duration_minutes}m)</span>
-          </div>
-        `;
-      } else if (leg.type === 'TRANSFER') {
-        legSummaryHtml += `
-          <div class="timeline-leg">
-            <span class="timeline-dot xfer"></span>
-            <span style="color: var(--accent-saffron);">${leg.instruction}</span>
-          </div>
-        `;
-      } else if (leg.type === 'WALK') {
-        legSummaryHtml += `
-          <div class="timeline-leg">
-            <span class="timeline-dot"></span>
-            <span>${leg.instruction} (${leg.duration_minutes}m)</span>
-          </div>
-        `;
-      }
-    });
-
-    const provBadgeClass = opt.provenance === 'LIVE' ? 'badge-live' : (opt.provenance === 'HISTORICAL' ? 'badge-historical' : 'badge-fallback');
-    const confBadgeClass = opt.confidence === 'HIGH' ? 'badge-high' : 'badge-fallback';
-
-    card.innerHTML = `
-      <div class="journey-header">
-        <div>
-          <span class="journey-time">${opt.total_duration_minutes}</span>
-          <span class="journey-time-unit">min</span>
-        </div>
-        <div style="display: flex; gap: 6px;">
-          <span class="badge ${provBadgeClass}">${opt.provenance}</span>
-          <span class="badge ${confBadgeClass}">${opt.confidence} CONFIDENCE</span>
-        </div>
-      </div>
-
-      <div class="metrics-strip">
-        <div class="metric-item">
-          <span class="metric-label">In-Vehicle</span>
-          <span class="metric-value">${opt.in_vehicle_minutes}m</span>
-        </div>
-        <div class="metric-item">
-          <span class="metric-label">Walking</span>
-          <span class="metric-value">${opt.walking_minutes}m</span>
-        </div>
-        <div class="metric-item">
-          <span class="metric-label">Transfers</span>
-          <span class="metric-value">${opt.transfers}</span>
-        </div>
-      </div>
-
-      <div class="legs-timeline">
-        ${legSummaryHtml}
-      </div>
-    `;
-
-    card.addEventListener('click', () => {
-      document.querySelectorAll('.journey-card').forEach(c => c.classList.remove('selected'));
-      card.classList.add('selected');
-      state.activeJourneyId = opt.journey_id || opt.option_id;
-      highlightJourneyOnMap(opt);
-    });
-
-    container.appendChild(card);
-  });
-
-  // Highlight first option by default
-  state.activeJourneyId = data.options[0]?.journey_id || 1;
-  highlightJourneyOnMap(data.options[0]);
-}
-
-function highlightJourneyOnMap(option) {
-  state.routeLayer.clearLayers();
-  const allBounds = [];
-
-  const routeColors = ['#0284c7', '#7c3aed', '#059669']; // High-contrast corridor colors
-  let busLegIndex = 0;
-
-  option.legs.forEach(leg => {
-    if (leg.type === 'WALK') {
-      // Dashed walking path
-      if (leg.geometry && leg.geometry.length >= 2) {
-        const poly = L.polyline(leg.geometry, {
-          color: '#64748b',
-          weight: 3.5,
-          dashArray: '6, 8',
-          opacity: 0.85
-        }).addTo(state.routeLayer);
-        poly.bindPopup(`<b>Walking Leg:</b> ${leg.instruction} (${leg.duration_minutes}m)`);
-        allBounds.push(...leg.geometry);
-      }
-    } else if (leg.type === 'BUS') {
-      const color = routeColors[busLegIndex % routeColors.length];
-      busLegIndex++;
-
-      // Authentic GTFS Road Geometry
-      if (leg.geometry && leg.geometry.length >= 2) {
-        const poly = L.polyline(leg.geometry, {
-          color: color,
-          weight: 5.5,
-          opacity: 0.95
-        }).addTo(state.routeLayer);
-
-        poly.bindPopup(`
-          <div style="font-size: 12px; font-family: var(--font-sans);">
-            <b>Route:</b> ${leg.route_name}<br/>
-            <b>From:</b> ${leg.boarding_stop}<br/>
-            <b>To:</b> ${leg.alighting_stop}<br/>
-            <b>Duration:</b> ${leg.predicted_duration_minutes} min (${leg.distance_km} km)<br/>
-            <b>Stops Traversed:</b> ${leg.stops_traversed} stops
-          </div>
-        `);
-        allBounds.push(...leg.geometry);
-      }
-
-      // Boarding Stop Marker
-      if (leg.boarding_lat && leg.boarding_lon) {
-        L.circleMarker([leg.boarding_lat, leg.boarding_lon], {
-          radius: 7,
-          color: '#00e676',
-          fillColor: '#ffffff',
-          fillOpacity: 1.0,
-          weight: 3
-        }).bindPopup(`<b>Boarding Stop:</b> ${leg.boarding_stop} (Route ${leg.route_name})`).addTo(state.routeLayer);
-        allBounds.push([leg.boarding_lat, leg.boarding_lon]);
-      }
-
-      // Alighting Stop Marker
-      if (leg.alighting_lat && leg.alighting_lon) {
-        L.circleMarker([leg.alighting_lat, leg.alighting_lon], {
-          radius: 7,
-          color: '#ff1744',
-          fillColor: '#ffffff',
-          fillOpacity: 1.0,
-          weight: 3
-        }).bindPopup(`<b>Alighting Stop:</b> ${leg.alighting_stop}`).addTo(state.routeLayer);
-        allBounds.push([leg.alighting_lat, leg.alighting_lon]);
-      }
-    } else if (leg.type === 'TRANSFER') {
-      if (leg.transfer_lat && leg.transfer_lon) {
-        L.circleMarker([leg.transfer_lat, leg.transfer_lon], {
-          radius: 8,
-          color: '#ffab00',
-          fillColor: '#ffffff',
-          fillOpacity: 1.0,
-          weight: 3
-        }).bindPopup(`<b>Transfer Hub:</b> ${leg.transfer_stop}<br/>${leg.instruction}`).addTo(state.routeLayer);
-        allBounds.push([leg.transfer_lat, leg.transfer_lon]);
-      }
+/* ── SYSTEM ──────────────────────────────────────────────── */
+async function loadSystem() {
+  try {
+    const s = await fetchJson('/api/v1/system/status');
+    const h = s.datasets?.historical_sqlite;
+    $('#sys-gps').textContent = h ? `${h.database_count}/${h.expected_count} days` : '–';
+    $('#sys-gtfs').textContent = s.datasets?.static_gtfs ? `${s.datasets.static_gtfs.file_count} files` : '–';
+    $('#sys-disk').textContent = s.storage ? `${Math.round(s.storage.free_gb)} GB` : '–';
+    const feed = s.live_feed?.status || '–';
+    $('#sys-feed').textContent = feed === 'ACTIVE' ? 'ACTIVE' : 'OFF';
+    $('#sys-feed').className = `stat-value ${feed === 'ACTIVE' ? 'fresh' : 'aging'}`;
+    const m = s.traffic_model || {};
+    let el = $('#sys-model');
+    if (!el) {
+      $('#system-stats').insertAdjacentHTML('beforeend', `
+        <div class="stat" style="grid-column:1/-1"><span class="stat-label">Traffic model</span><span class="stat-value small" id="sys-model"></span><span class="stat-sub" id="sys-model-sub"></span></div>`);
+      el = $('#sys-model');
     }
-  });
-
-  if (state.originCoords && typeof state.originCoords.lat === 'number') {
-    allBounds.push([state.originCoords.lat, state.originCoords.lon]);
-  }
-  if (state.destCoords && typeof state.destCoords.lat === 'number') {
-    allBounds.push([state.destCoords.lat, state.destCoords.lon]);
-  }
-
-  if (allBounds.length > 0) {
-    state.map.fitBounds(L.latLngBounds(allBounds), { padding: [50, 50] });
-  }
-}
-
-// ==========================================
-// 8. TRAFFIC TIME MACHINE
-// ==========================================
-function initTimeMachine() {
-  const routeSelect = document.getElementById('tm-route-select');
-  const dowSelect = document.getElementById('tm-dow-select');
-  const slider = document.getElementById('tm-hour-slider');
-  const hourDisplay = document.getElementById('tm-hour-display');
-
-  if (!routeSelect || !slider) return;
-
-  // Load available major routes
-  safeFetchJson('/api/v1/routes?limit=50')
-    .then(routes => {
-      routeSelect.innerHTML = '';
-      routes.forEach(r => {
-        const opt = document.createElement('option');
-        opt.value = r.route_id;
-        opt.innerText = `${r.route_short_name} (${r.route_long_name || 'DTC Route'})`;
-        routeSelect.appendChild(opt);
-      });
-      // Initial trigger
-      updateTimeComparison();
-    })
-    .catch(err => console.warn("Failed to load routes for Time Machine:", err.message));
-
-  routeSelect.addEventListener('change', updateTimeComparison);
-  if (dowSelect) dowSelect.addEventListener('change', updateTimeComparison);
-
-  slider.addEventListener('input', () => {
-    const hr = parseInt(slider.value, 10);
-    const ampm = hr >= 12 ? 'PM' : 'AM';
-    const displayHr = hr % 12 === 0 ? 12 : hr % 12;
-    if (hourDisplay) hourDisplay.innerText = `${String(displayHr).padStart(2, '0')}:00 ${ampm}`;
-    updateTimeComparison();
-  });
-}
-
-async function updateTimeComparison() {
-  const routeSelect = document.getElementById('tm-route-select');
-  const dowSelect = document.getElementById('tm-dow-select');
-  const slider = document.getElementById('tm-hour-slider');
-
-  if (!routeSelect || !slider) return;
-
-  const routeId = routeSelect.value;
-  const isWeekend = dowSelect ? dowSelect.value : '0';
-  const hour = slider.value;
-
-  if (!routeId) return;
-
-  try {
-    const url = `/api/v1/analytics/time-comparison?route_id=${encodeURIComponent(routeId)}&hour=${hour}&is_weekend=${isWeekend}`;
-    const data = await safeFetchJson(url);
-
-    // Update KPI Tiles
-    const curEl = document.getElementById('tm-current-time');
-    const freeEl = document.getElementById('tm-freeflow-time');
-    const delayEl = document.getElementById('tm-delay-time');
-    const speedEl = document.getElementById('tm-avg-speed');
-
-    if (curEl) curEl.innerText = `${data.selected_hour_duration_minutes}m`;
-    if (freeEl) freeEl.innerText = `${data.freeflow_duration_minutes}m`;
-    if (delayEl) delayEl.innerText = `+${data.delay_minutes}m`;
-    if (speedEl) speedEl.innerText = `${data.avg_speed_kmh} km/h`;
-
-    updateTimeMachineChart(data.hourly_profile, parseInt(hour, 10));
-  } catch (err) {
-    console.warn("Time comparison query notice:", err.message);
-  }
-}
-
-function updateTimeMachineChart(profile, activeHour) {
-  const chartContainer = document.getElementById('tm-chart-bars');
-  if (!chartContainer || !profile) return;
-
-  chartContainer.innerHTML = '';
-  const maxVal = Math.max(...profile.map(p => p.travel_time_minutes));
-
-  profile.forEach(p => {
-    const barWrap = document.createElement('div');
-    barWrap.className = `chart-bar-col ${p.hour === activeHour ? 'active' : ''}`;
-
-    const heightPct = Math.max(12, Math.round((p.travel_time_minutes / maxVal) * 100));
-    const isPeak = (p.hour >= 8 && p.hour <= 11) || (p.hour >= 17 && p.hour <= 20);
-
-    barWrap.innerHTML = `
-      <div class="chart-bar ${isPeak ? 'peak' : ''}" style="height: ${heightPct}%;">
-        <span class="bar-tooltip">${p.travel_time_minutes}m (${p.speed_kmh} km/h)</span>
-      </div>
-      <span class="bar-label">${p.hour}h</span>
-    `;
-
-    barWrap.addEventListener('click', () => {
-      const slider = document.getElementById('tm-hour-slider');
-      if (slider) {
-        slider.value = p.hour;
-        slider.dispatchEvent(new Event('input'));
-      }
-    });
-
-    chartContainer.appendChild(barWrap);
-  });
-}
-
-// ==========================================
-// 9. VALIDATION LAB BENCHMARKS
-// ==========================================
-async function loadValidationLab() {
-  try {
-    const data = await safeFetchJson('/api/v1/validation/summary');
-    
-    const maeModel = document.getElementById('val-model-mae');
-    const maeStatic = document.getElementById('val-static-mae');
-    const errorRed = document.getElementById('val-error-reduction');
-    const accuracy = document.getElementById('val-accuracy');
-
-    if (maeModel) maeModel.innerText = `${data.pulse_model_mae_minutes}m`;
-    if (maeStatic) maeStatic.innerText = `${data.static_schedule_mae_minutes}m`;
-    if (errorRed) errorRed.innerText = `-${data.error_reduction_pct}%`;
-    if (accuracy) accuracy.innerText = `${data.model_accuracy_pct}%`;
-
-    // Render benchmark rows
-    const tbody = document.getElementById('val-benchmarks-tbody');
-    if (tbody && data.benchmarks) {
-      tbody.innerHTML = '';
-      data.benchmarks.forEach(b => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td><strong>${b.corridor}</strong><br/><span style="font-size: 11px; color: var(--text-muted);">${b.condition}</span></td>
-          <td>${b.distance_km} km</td>
-          <td style="color: #ef4444; font-weight: 700;">${b.static_timetable_minutes}m</td>
-          <td style="color: var(--text-main); font-weight: 700;">${b.observed_bus_minutes}m</td>
-          <td style="color: var(--accent-cyan); font-weight: 800;">${b.pulse_predicted_minutes}m</td>
-          <td style="color: var(--text-muted);">${b.google_maps_minutes}m</td>
-          <td><span class="badge badge-high">${b.accuracy_pct}%</span></td>
-        `;
-        tbody.appendChild(tr);
-      });
+    if (m.status === 'READY') {
+      el.textContent = `${(m.segments || 0).toLocaleString()} stretches · ${m.cells_measured_pct}% cells measured`;
+      $('#sys-model-sub').textContent = `Trained on days ${m.train_days?.[0]}–${m.train_days?.at(-1)} Oct · built ${String(m.built_at || '').slice(0, 16).replace('T', ' ')} UTC`;
+    } else {
+      el.textContent = 'Not trained';
+      $('#sys-model-sub').textContent = 'python scripts/build_traffic_model.py all';
     }
   } catch (err) {
-    console.warn("Failed to load validation lab data:", err.message);
-  }
-}
-
-// ==========================================
-// 10. SYSTEM COMMAND CENTER
-// ==========================================
-async function loadCommandStatus() {
-  try {
-    const data = await safeFetchJson('/api/v1/system/status');
-
-    const diskEl = document.getElementById('cmd-disk-storage');
-    const histEl = document.getElementById('cmd-hist-dbs');
-    const gtfsEl = document.getElementById('cmd-gtfs-stops');
-    const feedEl = document.getElementById('cmd-feed-status');
-
-    if (diskEl) diskEl.innerText = `${data.storage.free_gb} GB Free (E:)`;
-    if (histEl) histEl.innerText = `${data.datasets.historical_sqlite.database_count} / 31 DBs`;
-    if (gtfsEl) gtfsEl.innerText = `6,862 Stops`;
-    if (feedEl) {
-      feedEl.innerText = data.live_feed.status;
-      feedEl.style.color = data.live_feed.status === 'ACTIVE' ? '#10B981' : '#F59E0B';
-    }
-  } catch (err) {
-    console.warn("Failed to load command status:", err.message);
+    toast(`System status unavailable: ${err.message}`);
   }
 }

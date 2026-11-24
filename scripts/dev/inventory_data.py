@@ -3,7 +3,7 @@ import sqlite3
 import glob
 
 def inventory_historical():
-    data_dir = "E:/Pulse/delhi-dtc-bus-gtfs-rt-2026-10"
+    data_dir = "delhi-dtc-bus-gtfs-rt-2026-10"
     print(f"=== Historical SQLite Inventory: {data_dir} ===")
     files = sorted(glob.glob(os.path.join(data_dir, "bus_movements_*.db")))
     print(f"Total database files found: {len(files)}")
@@ -33,7 +33,7 @@ def inventory_historical():
     print(f"Total size across all {len(files)} databases: {total_bytes / (1024**3):.2f} GB ({total_bytes:,} bytes)")
 
 def inventory_gtfs():
-    gtfs_dir = "E:/Pulse/delhi_buses_static_gtfs_v1"
+    gtfs_dir = "delhi_buses_static_gtfs_v1"
     print(f"\n=== Static GTFS Inventory: {gtfs_dir} ===")
     files = sorted(os.listdir(gtfs_dir))
     total_gtfs_bytes = 0

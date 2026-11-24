@@ -12,9 +12,11 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.data.gtfs.repository import gtfs_repo
 from app.routing.walking import calculate_walking_leg
-from app.routing.raptor import raptor_router, RaptorJourneyOption
+from app.routing.raptor import raptor_router, RaptorJourneyOption, resolve_geometries
 from app.services.prediction_service import prediction_service
 from app.services.places_service import places_service
+from app.services.realtime_service import realtime_service
+from app.models.live_fusion import fuse_live_and_historical
 
 
 class JourneyPlanningService:
@@ -176,6 +178,7 @@ class JourneyPlanningService:
 
         # Filter Pareto optimal options
         pareto_opts = raptor_router.filter_pareto_optimal(all_candidates, max_options=3)
+        resolve_geometries(pareto_opts)
 
         formatted_options = []
         for idx, opt in enumerate(pareto_opts):
@@ -196,6 +199,8 @@ class JourneyPlanningService:
                         leg["alighting_lon"] = leg["geometry"][-1][1]
 
             formatted_options.append(d)
+
+        live_used = self._apply_live_fusion(formatted_options, dep_s, date_str)
 
         # Comparative Off-Peak Benchmark (Satisfies 2.2 in Hackathon Brief)
         # Evaluate how long the same trip takes at off-peak (11:00 PM)
@@ -226,8 +231,74 @@ class JourneyPlanningService:
             "departure_time": departure_time_str or datetime.now().strftime("%H:%M:%S"),
             "journey_options_count": len(formatted_options),
             "options": formatted_options,
-            "off_peak_comparison": off_peak_comparison
+            "off_peak_comparison": off_peak_comparison,
+            "live": live_used,
         }
+
+
+    @staticmethod
+    def _apply_live_fusion(options: List[Dict[str, Any]], dep_s: int, date_str: Optional[str]) -> Dict[str, Any]:
+        """Blend each bus leg with the route's live pace when the trip departs
+        within 30 min of now (IST) and the live window has enough evidence."""
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo(settings.TIMEZONE))
+        now_s = now.hour * 3600 + now.minute * 60 + now.second
+        same_day = (not date_str) or date_str == now.strftime("%Y-%m-%d")
+        near_now = same_day and abs(((dep_s - now_s + 43200) % 86400) - 43200) <= 1800
+        info = {"applied": False, "reason": None}
+        if not (settings.LIVE_FEED_ENABLED and settings.OTD_API_KEY):
+            info["reason"] = "LIVE_FEED_OFF"
+            return info
+        if not near_now:
+            info["reason"] = "DEPARTURE_NOT_NOW"
+            return info
+        for opt in options:
+            delta_total = 0.0
+            any_live = False
+            for leg in opt.get("legs", []):
+                if leg.get("type") != "BUS":
+                    continue
+                live = realtime_service.route_live_pace(str(leg.get("route_id")))
+                t_hist = float(leg.get("predicted_duration_minutes", 0)) * 60.0
+                dist_m = float(leg.get("distance_km", 0)) * 1000.0
+                if not live or t_hist <= 0 or dist_m <= 0:
+                    leg["live_weight"] = 0.0
+                    leg["freshness"] = "UNAVAILABLE"
+                    continue
+                spread_h = max(1.0, (float(leg.get("upper_bound_minutes", 0)) - float(leg.get("lower_bound_minutes", 0))) * 60.0 / 2.56)
+                fused = fuse_live_and_historical(
+                    t_live=dist_m * live["pace_s_per_m"],
+                    var_live=(dist_m ** 2) * live["pace_var"] / max(live["n_pairs"], 1) + (0.15 * dist_m * live["pace_s_per_m"]) ** 2,
+                    vehicle_age_seconds=live["age_s"],
+                    n_live_vehicles=live["n_vehicles"],
+                    t_hist=t_hist,
+                    var_hist=spread_h ** 2,
+                    n_hist_trips=30,
+                    stale_threshold_seconds=settings.LIVE_MAX_STALENESS_SECONDS,
+                )
+                leg["live_weight"] = fused["weight_live"]
+                leg["freshness"] = fused["freshness_state"]
+                leg["live_buses"] = live["n_vehicles"]
+                if fused["weight_live"] > 0.05:
+                    new_t = float(fused["estimated_travel_time_s"])
+                    delta = new_t - t_hist
+                    leg["historical_duration_minutes"] = leg["predicted_duration_minutes"]
+                    leg["predicted_duration_minutes"] = round(new_t / 60.0, 1)
+                    leg["lower_bound_minutes"] = round(float(leg["lower_bound_minutes"]) + delta / 60.0, 1)
+                    leg["upper_bound_minutes"] = round(float(leg["upper_bound_minutes"]) + delta / 60.0, 1)
+                    leg["provenance"] = "LIVE + HISTORICAL"
+                    delta_total += delta
+                    any_live = True
+            if any_live:
+                opt["total_duration_minutes"] = round(opt["total_duration_minutes"] + delta_total / 60.0, 1)
+                opt["in_vehicle_minutes"] = round(opt["in_vehicle_minutes"] + delta_total / 60.0, 1)
+                opt["lower_bound_minutes"] = round(opt["lower_bound_minutes"] + delta_total / 60.0, 1)
+                opt["upper_bound_minutes"] = round(opt["upper_bound_minutes"] + delta_total / 60.0, 1)
+                opt["provenance"] = "LIVE + HISTORICAL"
+                info["applied"] = True
+        if not info["applied"]:
+            info["reason"] = "NOT_ENOUGH_LIVE_EVIDENCE"
+        return info
 
 
 # Global singleton journey service

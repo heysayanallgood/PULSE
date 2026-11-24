@@ -25,7 +25,8 @@ class GTFSRepository:
         if self._con is None:
             # Connect in read-only mode to prevent database locks
             self._con = duckdb.connect(str(self.db_path), read_only=True)
-            self._con.execute("SET temp_directory = 'E:/Pulse/data/cache/duckdb';")
+            tmp_dir = (settings.CACHE_ROOT / "duckdb").resolve().as_posix()
+            self._con.execute(f"SET temp_directory = '{tmp_dir}';")
         return self._con.cursor()
 
     def _init_repository(self):

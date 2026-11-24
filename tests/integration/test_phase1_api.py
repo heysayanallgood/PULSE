@@ -33,7 +33,8 @@ def test_ready_endpoint():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "READY"
-    assert data["storage"]["drive"] == "E:"
+    from pathlib import Path
+    assert data["storage"]["drive"] == Path(".").resolve().anchor
     assert data["storage"]["free_gb"] > 50.0
 
 def test_system_status_endpoint():

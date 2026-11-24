@@ -1,7 +1,7 @@
 """
 PULSE Static GTFS Ingestion Pipeline (scripts/ingest_gtfs.py)
-Reads raw GTFS text files from E:/Pulse/delhi_buses_static_gtfs_v1
-and creates an indexed, validated analytical DuckDB database at E:/Pulse/data/database/gtfs.duckdb.
+Reads raw GTFS text files from delhi_buses_static_gtfs_v1
+and creates an indexed, validated analytical DuckDB database at data/database/gtfs.duckdb.
 """
 import os
 import sys
@@ -9,8 +9,8 @@ import time
 import duckdb
 from pathlib import Path
 
-GTFS_DIR = Path("E:/Pulse/delhi_buses_static_gtfs_v1")
-DB_PATH = Path("E:/Pulse/data/database/gtfs.duckdb")
+GTFS_DIR = Path("delhi_buses_static_gtfs_v1")
+DB_PATH = Path("data/database/gtfs.duckdb")
 
 def ingest_gtfs():
     print(f"=== Starting Static GTFS Ingestion ===")
@@ -26,7 +26,7 @@ def ingest_gtfs():
             print(f"Note: {e}")
         
     con = duckdb.connect(str(DB_PATH))
-    con.execute("SET temp_directory = 'E:/Pulse/data/cache/duckdb';")
+    con.execute("SET temp_directory = 'data/cache/duckdb';")
     
     t0 = time.time()
     

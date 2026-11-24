@@ -3,407 +3,294 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PULSE — Predictive Urban Mobility & Live Spatiotemporal Engine</title>
-  <link rel="icon" href="data:,">
-  
-  <meta name="pulse-build-version" content="20261122-v2.1.0">
-  <meta name="pulse-app-version" content="1.0.0">
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <meta http-equiv="Pragma" content="no-cache">
-  <meta http-equiv="Expires" content="0">
-  
-  <script>
-    // Safeguard (Phase 2 Cause O & Phase 3): Unregister any stale service workers
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then(function(registrations) {
-        for (var i = 0; i < registrations.length; i++) {
-          registrations[i].unregister();
-        }
-      });
-    }
-  </script>
-  
-  <!-- Leaflet CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-  <!-- Leaflet MarkerCluster CSS -->
-  <link rel="stylesheet" href="/static/vendor/MarkerCluster.css?v=20261122-v2.1.0">
-  <link rel="stylesheet" href="/static/vendor/MarkerCluster.Default.css?v=20261122-v2.1.0">
-  
-  <!-- Google Fonts: Inter -->
+  <title>PULSE — Delhi Bus Pulse Globe</title>
+  <meta name="description" content="PULSE by HopCode — Delhi DTC bus traffic model and journey planner on a 3D globe.">
+  <meta name="pulse-build-version" content="20261123-v3.0.0-globe">
+  <link rel="icon" type="image/svg+xml" href="/static/assets/pulse-logo.svg">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
-  
-  <!-- PULSE Stylesheet -->
-  <link rel="stylesheet" href="/static/css/pulse.css?v=20261122-v2.1.0">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0" rel="stylesheet">
+
+  <!-- CesiumJS (3D globe engine) -->
+  <script>window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.124.0/Build/Cesium/';</script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.124.0/Build/Cesium/Widgets/widgets.css">
+  <script src="https://cdn.jsdelivr.net/npm/cesium@1.124.0/Build/Cesium/Cesium.js"></script>
+
+  <link rel="stylesheet" href="/static/css/pulse.css?v=20261124-v3.1.0">
 </head>
-<body>
+<body data-mode="journey" data-vision="normal">
 
-  <!-- Top Navigation Header -->
-  <header class="pulse-header">
-    <div class="brand-container">
-      <div class="brand-logo">P</div>
-      <div class="brand-text">
-        <h1>PULSE <span class="brand-badge">HopCode</span></h1>
-        <div class="brand-tagline">Predictive Urban Mobility & Live Spatiotemporal Engine</div>
-      </div>
+  <!-- ── 3D GLOBE ─────────────────────────────────────────── -->
+  <div id="globe"></div>
+  <div id="globe-vignette" aria-hidden="true"></div>
+
+  <!-- ── LOADING SCREEN ───────────────────────────────────── -->
+  <div id="loading-screen" role="status" aria-live="polite">
+    <div class="loader-core">
+      <div class="loader-rings" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="loader-title">PULSE</div>
+      <div class="loader-status">Spinning up the globe…</div>
     </div>
+  </div>
 
-    <!-- View Switcher Tabs -->
-    <nav class="pulse-nav">
-      <button class="nav-tab active" data-view="journey">
-        <span>🗺️</span> Journey Planner
-      </button>
-      <button class="nav-tab" data-view="live">
-        <span>📡</span> Live Bus Map
-      </button>
-      <button class="nav-tab" data-view="timemachine">
-        <span>⏳</span> Time Machine
-      </button>
-      <button class="nav-tab" data-view="validation">
-        <span>🧪</span> Validation Lab
-      </button>
-      <button class="nav-tab" data-view="command">
-        <span>⚙️</span> Command Center
-      </button>
-    </nav>
-
-    <!-- System Health Dot -->
-    <div class="header-status">
-      <div class="status-indicator">
-        <span class="pulse-dot"></span>
-        <span id="header-status-text">Engine Online (E: 793 GB)</span>
-      </div>
-    </div>
+  <!-- ── TITLE ────────────────────────────────────────────── -->
+  <header id="title-bar">
+    <div class="title-glow" aria-hidden="true"></div>
+    <h1>
+      <img class="title-logo" src="/static/assets/pulse-logo.svg" alt="" aria-hidden="true">
+      <span>PULSE<span class="title-accent">·DELHI</span></span>
+    </h1>
+    <p class="subtitle">THE CITY MOVES. WE DECODE ITS PULSE. <span class="team">HopCode</span></p>
   </header>
 
-  <!-- Main Content Container -->
-  <main class="pulse-content">
-
-    <!-- Map Selection Banner (active when user picks a location on the map) -->
-    <div id="map-selection-banner" class="map-selection-banner" style="display: none;">
-      <span id="map-selection-text">📍 Click anywhere on the map to set Origin...</span>
-      <button type="button" id="btn-cancel-pick" class="btn-text-sm" style="color: #ff5252; margin-left: 8px; font-weight: 700;">✕ Cancel</button>
+  <!-- ── TOP-RIGHT: ACTIVE MODE + MAP STACK + VISION ──────── -->
+  <section id="top-right">
+    <div id="mode-indicator">
+      <span class="indicator-label">ACTIVE MODE</span>
+      <span class="indicator-value" id="mode-indicator-value">JOURNEY</span>
     </div>
 
-    <!-- SHARED LEAFLET MAP ELEMENT (VISIBLE ON JOURNEY & LIVE VIEWS) -->
-    <div id="shared-map-container">
-      <div id="map-element"></div>
+    <div class="chip-group" role="radiogroup" aria-label="Map imagery">
+      <span class="chip-group-label">MAP</span>
+      <button class="chip" data-stack="photoreal" title="Google Photorealistic 3D Tiles">3D CITY</button>
+      <button class="chip" data-stack="satellite" title="Satellite imagery on the globe">SAT</button>
+      <button class="chip" data-stack="dark" title="Dark street map on the globe">DARK</button>
+      <button class="chip" data-stack="light" title="Light street map on the globe">LIGHT</button>
+      <button class="chip active" data-labels title="Road and place names on the satellite map" aria-pressed="true">NAMES</button>
+    </div>
+    <div class="chip-group" role="radiogroup" aria-label="Vision style">
+      <span class="chip-group-label">VISION</span>
+      <button class="chip active" data-vision="normal" title="Normal colour">NORMAL</button>
+      <button class="chip" data-vision="nvg" title="Night-vision green">NVG</button>
+      <button class="chip" data-vision="flir" title="Thermal white-hot">FLIR</button>
+      <button class="chip" data-vision="crt" title="Amber CRT">CRT</button>
+    </div>
+  </section>
 
-      <!-- VISIBLE LAYER CONTROL (SECTION 2.5) -->
-      <div id="pulse-layer-selector" class="pulse-layer-control">
-        <div class="layer-control-header">
-          <span class="layer-control-title">MAP STYLE</span>
-          <span id="layer-status-indicator" class="layer-status-dot" title="Tile provider active"></span>
-        </div>
-        <div class="layer-control-options">
-          <label class="layer-radio-item active" data-layer="positron">
-            <input type="radio" name="pulse-map-style" value="positron" checked>
-            <span class="radio-indicator"></span>
-            <span class="layer-name">Street Light</span>
-            <span class="layer-badge">CARTO</span>
-          </label>
-          <label class="layer-radio-item" data-layer="voyager">
-            <input type="radio" name="pulse-map-style" value="voyager">
-            <span class="radio-indicator"></span>
-            <span class="layer-name">Detailed Street</span>
-            <span class="layer-badge">CARTO</span>
-          </label>
-          <label class="layer-radio-item" data-layer="dark">
-            <input type="radio" name="pulse-map-style" value="dark">
-            <span class="radio-indicator"></span>
-            <span class="layer-name">Dark Street</span>
-            <span class="layer-badge">CARTO</span>
-          </label>
-          <label class="layer-radio-item" data-layer="satellite-plain">
-            <input type="radio" name="pulse-map-style" value="satellite-plain">
-            <span class="radio-indicator"></span>
-            <span class="layer-name">Satellite Plain</span>
-            <span class="layer-badge">MapTiler</span>
-          </label>
-          <label class="layer-radio-item" data-layer="satellite-hybrid">
-            <input type="radio" name="pulse-map-style" value="satellite-hybrid">
-            <span class="radio-indicator"></span>
-            <span class="layer-name">Satellite Hybrid</span>
-            <span class="layer-badge">MapTiler</span>
-          </label>
-          <label class="layer-radio-item" data-layer="osm">
-            <input type="radio" name="pulse-map-style" value="osm">
-            <span class="radio-indicator"></span>
-            <span class="layer-name">OpenStreetMap</span>
-            <span class="layer-badge">OSM</span>
-          </label>
-        </div>
+  <!-- ── RIGHT RAIL: CAMERA VERBS ─────────────────────────── -->
+  <nav id="camera-rail" aria-label="Camera">
+    <button class="rail-btn" id="btn-zoom-in" title="Zoom in (+)" aria-label="Zoom in"><span class="material-symbols-outlined">add</span></button>
+    <button class="rail-btn" id="btn-zoom-out" title="Zoom out (−)" aria-label="Zoom out"><span class="material-symbols-outlined">remove</span></button>
+    <button class="rail-btn" id="btn-fly-delhi" title="Fly to Delhi" aria-label="Fly to Delhi"><span class="material-symbols-outlined">location_city</span></button>
+    <button class="rail-btn" id="btn-tilt" title="Toggle top-down / oblique" aria-label="Toggle top-down or oblique view"><span class="material-symbols-outlined">3d_rotation</span></button>
+    <button class="rail-btn" id="btn-reset-globe" title="Back to full globe" aria-label="Back to full globe"><span class="material-symbols-outlined">public</span></button>
+  </nav>
+
+  <!-- ── INTEL HUD (corner telemetry) ─────────────────────── -->
+  <div id="hud" aria-hidden="true">
+    <div class="hud-corner hud-bl">
+      <span class="hud-bracket">⌞</span>
+      <div class="hud-content">
+        <div class="hud-row"><b>CTR</b> <span id="hud-latlon">--.----N --.----E</span></div>
+        <div class="hud-row"><b>ALT</b> <span id="hud-alt">-----</span> · <b>HDG</b> <span id="hud-hdg">---</span> · <b>PIT</b> <span id="hud-pitch">---</span></div>
+        <div class="hud-row dim" id="hud-locality">NATIONAL CAPITAL TERRITORY</div>
       </div>
     </div>
+    <div class="hud-corner hud-br">
+      <div class="hud-content right">
+        <div class="hud-row"><b>IST</b> <span id="hud-clock">--:--:--</span></div>
+        <div class="hud-row"><b>FEED</b> <span id="hud-feed">CHECKING</span></div>
+        <div class="hud-row dim"><span id="hud-model">MODEL · LOADING</span></div>
+      </div>
+      <span class="hud-bracket">⌟</span>
+    </div>
+    <div class="hud-crosshair" aria-hidden="true"></div>
+  </div>
 
-    <!-- VIEW 1: JOURNEY PLANNER (SPLIT MAP + SIDEBAR) -->
-    <section id="view-journey" class="view-pane active">
-      <div class="split-sidebar">
-        <!-- Search & Control Card -->
-        <div class="query-card">
-          <form id="journey-form">
-            <div class="form-group">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <label class="form-label" for="input-origin" style="margin-bottom: 0;">Origin</label>
-                <button type="button" id="btn-pick-origin" class="btn-pick-map" title="Click on map to select origin">📍 Pick on Map</button>
-              </div>
-              <div class="input-with-icon autocomplete-wrapper">
-                <span class="input-icon">🟢</span>
-                <input type="text" id="input-origin" class="pulse-input" placeholder="Search 6,862 Delhi stops or places..." value="Kashmere Gate" autocomplete="off" required>
-                <div id="origin-suggestions" class="autocomplete-dropdown" style="display: none;"></div>
-              </div>
-            </div>
+  <!-- ── PICK-ON-GLOBE BANNER ─────────────────────────────── -->
+  <div id="pick-banner" hidden>
+    <span class="material-symbols-outlined">my_location</span>
+    <span id="pick-banner-text">Click the globe to set the origin</span>
+    <button type="button" id="btn-cancel-pick" class="link-btn">Cancel</button>
+  </div>
 
-            <div style="display: flex; justify-content: flex-end; margin: -4px 0 6px 0;">
-              <button type="button" id="swap-locations-btn" style="background: none; border: none; color: var(--accent-cyan); font-size: 11px; cursor: pointer;">
-                ⇅ Swap Locations
-              </button>
-            </div>
+  <!-- ── MAIN PANEL (left glass) ──────────────────────────── -->
+  <aside id="panel" aria-label="Control panel">
 
-            <div class="form-group">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <label class="form-label" for="input-dest" style="margin-bottom: 0;">Destination</label>
-                <button type="button" id="btn-pick-dest" class="btn-pick-map" title="Click on map to select destination">📍 Pick on Map</button>
-              </div>
-              <div class="input-with-icon autocomplete-wrapper">
-                <span class="input-icon">🔴</span>
-                <input type="text" id="input-dest" class="pulse-input" placeholder="Search 6,862 Delhi stops or places..." value="Nehru Place" autocomplete="off" required>
-                <div id="dest-suggestions" class="autocomplete-dropdown" style="display: none;"></div>
-              </div>
-            </div>
+    <!-- JOURNEY -->
+    <section class="mode-pane active" data-pane="journey">
+      <div class="pane-head">
+        <span class="pane-kicker">01 · JOURNEY PLANNER</span>
+        <h2>Plan a bus trip</h2>
+        <p class="pane-sub">Travel times come from a model of real DTC bus GPS traces, by time of day.</p>
+      </div>
 
-            <div class="time-row">
-              <div class="form-group" style="margin-bottom: 0;">
-                <label class="form-label" for="input-time">Departure Time</label>
-                <input type="time" id="input-time" class="pulse-input" style="padding-left: 12px;" value="08:30" required>
-              </div>
-              <div class="form-group" style="margin-bottom: 0;">
-                <label class="form-label" for="input-date">Date</label>
-                <input type="date" id="input-date" class="pulse-input" style="padding-left: 12px;" value="2026-10-15">
-              </div>
-            </div>
-
-            <!-- Preset Peak / Off-Peak Buttons -->
-            <label class="form-label" style="margin-top: 10px;">Quick Presets</label>
-            <div class="preset-pills">
-              <button type="button" class="preset-pill active" data-time="08:30">Morning Peak (08:30)</button>
-              <button type="button" class="preset-pill" data-time="14:00">Midday (14:00)</button>
-              <button type="button" class="preset-pill" data-time="18:30">Evening Peak (18:30)</button>
-              <button type="button" class="preset-pill" data-time="23:00">Night Off-Peak (23:00)</button>
-            </div>
-
-            <button type="submit" id="plan-submit-btn" class="btn-primary">
-              <span>⚡</span> Plan Optimal Journey
-            </button>
-          </form>
+      <form id="journey-form" autocomplete="off">
+        <div class="field">
+          <div class="field-head">
+            <label for="input-origin">From</label>
+            <button type="button" class="link-btn" id="btn-pick-origin"><span class="material-symbols-outlined">ads_click</span>Pick on globe</button>
+          </div>
+          <div class="input-wrap">
+            <span class="dot dot-origin" aria-hidden="true"></span>
+            <input id="input-origin" type="text" value="Kashmere Gate" placeholder="Stop, place or lat, lon" required>
+            <div class="suggestions" id="origin-suggestions" role="listbox" hidden></div>
+          </div>
         </div>
 
-        <!-- Journey Results List -->
-        <div id="journey-results-list" class="results-container">
-          <!-- Rendered dynamically by app.js -->
+        <button type="button" id="btn-swap" class="swap-btn" title="Swap from and to" aria-label="Swap from and to"><span class="material-symbols-outlined">swap_vert</span></button>
+
+        <div class="field">
+          <div class="field-head">
+            <label for="input-dest">To</label>
+            <button type="button" class="link-btn" id="btn-pick-dest"><span class="material-symbols-outlined">ads_click</span>Pick on globe</button>
+          </div>
+          <div class="input-wrap">
+            <span class="dot dot-dest" aria-hidden="true"></span>
+            <input id="input-dest" type="text" value="Nehru Place" placeholder="Stop, place or lat, lon" required>
+            <div class="suggestions" id="dest-suggestions" role="listbox" hidden></div>
+          </div>
         </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="input-time">Depart at</label>
+            <input id="input-time" type="time" value="08:30" required>
+          </div>
+          <div class="field">
+            <label for="input-date">Date</label>
+            <input id="input-date" type="date" value="2026-10-15">
+          </div>
+        </div>
+
+        <div class="presets" role="group" aria-label="Departure presets">
+          <button type="button" class="preset" data-time="now" title="Depart now: uses the live feed when available">Now</button>
+          <button type="button" class="preset active" data-time="08:30">AM peak</button>
+          <button type="button" class="preset" data-time="14:00">Midday</button>
+          <button type="button" class="preset" data-time="18:30">PM peak</button>
+          <button type="button" class="preset" data-time="23:00">Night</button>
+        </div>
+
+        <button type="submit" id="btn-plan" class="btn-primary">
+          <span class="material-symbols-outlined">route</span><span class="btn-label">Find journeys</span>
+        </button>
+      </form>
+
+      <div id="journey-results" class="results" aria-live="polite"></div>
+    </section>
+
+    <!-- LIVE -->
+    <section class="mode-pane" data-pane="live">
+      <div class="pane-head">
+        <span class="pane-kicker">02 · LIVE FLEET</span>
+        <h2>Buses on the road now</h2>
+        <p class="pane-sub">GTFS-RT vehicle positions from Delhi Open Transit Data, refreshed every 30&nbsp;s.</p>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><span class="stat-label">Vehicles</span><span class="stat-value" id="live-count">—</span></div>
+        <div class="stat"><span class="stat-label">Fresh ≤60s</span><span class="stat-value fresh" id="live-fresh">—</span></div>
+        <div class="stat"><span class="stat-label">Aging</span><span class="stat-value aging" id="live-aging">—</span></div>
+        <div class="stat"><span class="stat-label">Stale &gt;90s</span><span class="stat-value stale" id="live-stale">—</span></div>
+      </div>
+      <div class="field">
+        <label for="live-route-filter">Filter by route</label>
+        <div class="input-wrap"><span class="material-symbols-outlined input-icon">filter_alt</span>
+          <input id="live-route-filter" type="text" placeholder="Route id, e.g. 1728">
+        </div>
+      </div>
+      <div class="row-between">
+        <span class="muted small" id="live-updated">Not polled yet</span>
+        <button type="button" class="btn-ghost" id="btn-live-refresh"><span class="material-symbols-outlined">refresh</span>Refresh</button>
+      </div>
+      <div class="notice" id="live-notice" hidden></div>
+      <p class="muted small">Click a bus on the globe for its route, speed and how old the fix is. No bus is ever simulated: if the feed is down this view stays empty and says so.</p>
+    </section>
+
+    <!-- CONGESTION -->
+    <section class="mode-pane" data-pane="congestion">
+      <div class="pane-head">
+        <span class="pane-kicker">03 · TRAFFIC MODEL</span>
+        <h2>Congestion by hour</h2>
+        <p class="pane-sub">Each road stretch is coloured by how much slower buses run than at free flow, from historical GPS.</p>
+      </div>
+      <div class="clock-card">
+        <div class="clock-top">
+          <span class="clock" id="cg-clock">08:00</span>
+          <span class="badge" id="cg-badge">AM PEAK</span>
+        </div>
+        <input type="range" id="cg-hour" min="0" max="23" step="1" value="8" aria-label="Hour of day">
+        <div class="ticks"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
+        <div class="row-between">
+          <div class="seg-toggle" role="group" aria-label="Day type">
+            <button type="button" class="seg active" data-weekend="0">Weekday</button>
+            <button type="button" class="seg" data-weekend="1">Weekend</button>
+          </div>
+          <button type="button" class="btn-ghost" id="btn-cg-play"><span class="material-symbols-outlined">play_arrow</span>Play day</button>
+        </div>
+        <div class="row-between" style="margin-bottom:0">
+          <span class="muted small">Raise stretches ≥2× slower as 3D walls (height = delay)</span>
+          <button type="button" class="btn-ghost active" id="btn-cg-extrude" aria-pressed="true"><span class="material-symbols-outlined">view_in_ar</span>3D</button>
+        </div>
+      </div>
+      <div class="legend-bar" aria-hidden="true"><span>1× free flow</span><div class="legend-gradient"></div><span>3× slower</span></div>
+      <div class="stat-grid">
+        <div class="stat"><span class="stat-label">Stretches shown</span><span class="stat-value" id="cg-count">—</span></div>
+        <div class="stat"><span class="stat-label">Median speed</span><span class="stat-value" id="cg-speed">—</span></div>
+        <div class="stat"><span class="stat-label">Slowed ≥2×</span><span class="stat-value stale" id="cg-slow">—</span></div>
+        <div class="stat"><span class="stat-label">Measured cells</span><span class="stat-value" id="cg-measured">—</span></div>
+      </div>
+      <div class="notice" id="cg-notice" hidden></div>
+      <div class="sparkline-card">
+        <div class="card-label">Network median speed by hour (km/h)</div>
+        <div id="cg-spark" class="spark"></div>
       </div>
     </section>
 
-    <!-- VIEW 2: LIVE BUS MAP -->
-    <section id="view-live" class="view-pane">
-      <div class="split-sidebar">
-        <div class="query-card">
-          <h2 style="font-size: 16px; margin-bottom: 8px;">DTC Live Vehicle Positions</h2>
-          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 14px;">
-            Authentic GTFS-RT protobuf stream decoded directly from the Delhi Open Transit Data API.
-          </p>
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <span id="live-bus-count" style="font-weight: 700; color: var(--accent-emerald);">Polling Live Feed...</span>
-            <button onclick="loadLiveBuses()" class="btn-primary" style="height: 32px; width: auto; padding: 0 14px; font-size: 12px;">
-              🔄 Refresh Feed
-            </button>
-          </div>
-          <div class="metrics-strip">
-            <div class="metric-item">
-              <span class="metric-label">Freshness Cutoff</span>
-              <span class="metric-value">90s</span>
-            </div>
-            <div class="metric-item">
-              <span class="metric-label">Provenance</span>
-              <span class="metric-value" style="color: var(--accent-emerald);">LIVE</span>
-            </div>
-            <div class="metric-item">
-              <span class="metric-label">Synthetic Data</span>
-              <span class="metric-value" style="color: var(--accent-cyan);">0%</span>
-            </div>
-          </div>
-          <div class="live-legend-strip">
-            <div class="legend-item"><span class="legend-swatch fresh"></span> FRESH (&le;60s)</div>
-            <div class="legend-item"><span class="legend-swatch aging"></span> AGING (61-90s)</div>
-            <div class="legend-item"><span class="legend-swatch stale"></span> STALE (&gt;90s)</div>
-          </div>
-          <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">
-            💡 <em>Zoom in to zoom 14+ to see individual Rapido-style 2D buses rotated by vehicle bearing!</em>
-          </div>
-        </div>
-        <div style="padding: 20px; font-size: 12px; color: var(--text-muted); line-height: 1.6;">
-          <p><strong>Strict ADR 005 Invariant:</strong> Zero simulated or fake vehicles. If the feed is disconnected, the system clearly displays the fallback state rather than inventing artificial congestion.</p>
-        </div>
+    <!-- VALIDATION -->
+    <section class="mode-pane" data-pane="validation">
+      <div class="pane-head">
+        <span class="pane-kicker">04 · VALIDATION</span>
+        <h2>Does it hold up?</h2>
+        <p class="pane-sub">Predictions scored against held-out real bus trips (days 25–31), the static timetable and Google Maps.</p>
       </div>
+      <div id="validation-body"><div class="skeleton"></div><div class="skeleton"></div></div>
     </section>
 
-    <!-- VIEW 3: TRAFFIC TIME MACHINE -->
-    <section id="view-timemachine" class="view-pane">
-      <div class="full-screen-pane">
-        <div class="pane-header">
-          <h2>Traffic Time Machine</h2>
-          <p>Compare how urban congestion changes travel time across all 24 hours of the day on Delhi's arterial bus corridors.</p>
-        </div>
-
-        <div class="time-slider-card">
-          <div style="display: flex; justify-content: space-between; align-items: baseline;">
-            <div>
-              <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted);">Corridor: Old Delhi to Sabha Pur (Route 1728, 15 km)</span>
-              <h3 id="tm-clock-display" style="font-size: 36px; font-weight: 800; color: var(--accent-cyan); line-height: 1.1;">08:00</h3>
-            </div>
-            <div>
-              <span id="tm-traffic-badge" class="badge badge-historical" style="font-size: 12px; padding: 4px 10px;">HEAVY CONGESTION (PEAK)</span>
-            </div>
-          </div>
-
-          <div class="slider-container">
-            <input type="range" id="time-machine-slider" class="pulse-slider" min="0" max="23" value="8" step="1">
-            <div class="time-ticks">
-              <span>00:00 (Night)</span>
-              <span>06:00</span>
-              <span>08:30 (AM Peak)</span>
-              <span>12:00</span>
-              <span>14:00 (Midday)</span>
-              <span>18:30 (PM Peak)</span>
-              <span>23:00 (Off-Peak)</span>
-            </div>
-          </div>
-
-          <div class="benchmarks-grid" style="margin-bottom: 0;">
-            <div class="stat-card">
-              <div class="stat-title">Predicted Travel Time</div>
-              <div class="stat-number" id="tm-duration-display">68.7 min</div>
-              <div class="stat-delta">Driven by PULSE Spatiotemporal Model</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-title">Effective Corridor Speed</div>
-              <div class="stat-number" id="tm-speed-display">13.1 km/h</div>
-              <div class="stat-delta">Peak congestion vs 31.7 km/h free flow</div>
-            </div>
-          </div>
-        </div>
+    <!-- SYSTEM -->
+    <section class="mode-pane" data-pane="system">
+      <div class="pane-head">
+        <span class="pane-kicker">05 · SYSTEM</span>
+        <h2>Engine status</h2>
+        <p class="pane-sub">Datasets, live feed and the public API.</p>
       </div>
-    </section>
-
-    <!-- VIEW 4: VALIDATION LABORATORY -->
-    <section id="view-validation" class="view-pane">
-      <div class="full-screen-pane">
-        <div class="pane-header">
-          <h2>Validation Laboratory & Benchmarks</h2>
-          <p>Chronological holdout evaluation comparing the PULSE Spatiotemporal Model against static GTFS timetables, real observed DTC bus trips, and Google Maps benchmarks.</p>
-        </div>
-
-        <div class="benchmarks-grid">
-          <div class="stat-card">
-            <div class="stat-title">PULSE MAE (Mean Absolute Error)</div>
-            <div class="stat-number" id="val-mae-pulse">1.9m</div>
-            <div class="stat-delta">Across all held-out trips</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-title">Static Timetable MAE</div>
-            <div class="stat-number" id="val-mae-tt" style="color: var(--accent-rose);">34.9m</div>
-            <div class="stat-delta">Severe schedule inaccuracy</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-title">Error Reduction</div>
-            <div class="stat-number" id="val-err-reduction" style="color: var(--accent-emerald);">-94.6%</div>
-            <div class="stat-delta">Relative to static timetable</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-title">Average Model Accuracy</div>
-            <div class="stat-number" id="val-accuracy">96.5%</div>
-            <div class="stat-delta">Grounded in observed movement</div>
-          </div>
-        </div>
-
-        <div class="table-container">
-          <table class="pulse-table">
-            <thead>
-              <tr>
-                <th>Corridor & Time</th>
-                <th>Distance</th>
-                <th>Static Timetable</th>
-                <th>Observed Bus Trip</th>
-                <th>PULSE Predicted</th>
-                <th>Google Maps</th>
-                <th>Accuracy</th>
-              </tr>
-            </thead>
-            <tbody id="val-benchmarks-body">
-              <!-- Rendered dynamically -->
-            </tbody>
-          </table>
-        </div>
+      <div class="stat-grid" id="system-stats">
+        <div class="stat"><span class="stat-label">GPS archive</span><span class="stat-value" id="sys-gps">—</span></div>
+        <div class="stat"><span class="stat-label">GTFS files</span><span class="stat-value" id="sys-gtfs">—</span></div>
+        <div class="stat"><span class="stat-label">Free disk</span><span class="stat-value" id="sys-disk">—</span></div>
+        <div class="stat"><span class="stat-label">Live feed</span><span class="stat-value" id="sys-feed">—</span></div>
       </div>
+      <div class="card-label">Public API</div>
+      <ul class="endpoint-list">
+        <li><span class="verb">GET</span><a href="/api/v1/journeys?from=Kashmere%20Gate&amp;to=Nehru%20Place&amp;depart_at=08:30:00" target="_blank" rel="noopener">/api/v1/journeys</a></li>
+        <li><span class="verb">GET</span><a href="/api/v1/analytics/congestion?hour=8" target="_blank" rel="noopener">/api/v1/analytics/congestion</a></li>
+        <li><span class="verb">GET</span><a href="/api/v1/vehicles?limit=50" target="_blank" rel="noopener">/api/v1/vehicles</a></li>
+        <li><span class="verb">GET</span><a href="/api/v1/places/autocomplete?q=AIIMS" target="_blank" rel="noopener">/api/v1/places/autocomplete</a></li>
+        <li><span class="verb">GET</span><a href="/api/v1/validation/summary" target="_blank" rel="noopener">/api/v1/validation/summary</a></li>
+        <li><span class="verb">GET</span><a href="/api/v1/system/status" target="_blank" rel="noopener">/api/v1/system/status</a></li>
+        <li><span class="verb docs">DOCS</span><a href="/docs" target="_blank" rel="noopener">/docs (OpenAPI)</a></li>
+      </ul>
     </section>
+  </aside>
 
-    <!-- VIEW 5: COMMAND CENTER -->
-    <section id="view-command" class="view-pane">
-      <div class="full-screen-pane">
-        <div class="pane-header">
-          <h2>System Command Center</h2>
-          <p>Physical workspace metrics, hardware isolation, dataset inventory, and live API endpoints.</p>
-        </div>
+  <!-- ── INSPECTOR (right card for clicked bus / leg) ─────── -->
+  <aside id="inspector" hidden aria-live="polite">
+    <button type="button" class="inspector-close" id="btn-inspector-close" aria-label="Close details"><span class="material-symbols-outlined">close</span></button>
+    <div id="inspector-body"></div>
+  </aside>
 
-        <div class="benchmarks-grid">
-          <div class="stat-card">
-            <div class="stat-title">SanDisk SSD Storage (E:)</div>
-            <div class="stat-number" id="cmd-drive-free">793 GB</div>
-            <div class="stat-delta" style="color: var(--accent-emerald);">Host C: protected (0 bytes written)</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-title">Historical GPS Archive</div>
-            <div class="stat-number" id="cmd-db-count">31 / 31 DBs</div>
-            <div class="stat-delta">115.50 GB (124 GB uncompressed)</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-title">Static GTFS Stops</div>
-            <div class="stat-number" id="cmd-gtfs-stops">6,862</div>
-            <div class="stat-delta">Spatial KD-Tree indexed</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-title">Live Feed Status</div>
-            <div class="stat-number" id="cmd-live-status" style="font-size: 20px;">INACTIVE_HISTORICAL_FALLBACK</div>
-            <div class="stat-delta">Safe historical mode active</div>
-          </div>
-        </div>
+  <!-- ── BOTTOM DOCK: MODES ───────────────────────────────── -->
+  <nav id="dock" aria-label="Modes">
+    <button class="dock-btn active" data-mode="journey"><span class="material-symbols-outlined">route</span><span>Journey</span></button>
+    <button class="dock-btn" data-mode="live"><span class="material-symbols-outlined">directions_bus</span><span>Live</span></button>
+    <button class="dock-btn" data-mode="congestion"><span class="material-symbols-outlined">traffic</span><span>Congestion</span></button>
+    <button class="dock-btn" data-mode="validation"><span class="material-symbols-outlined">fact_check</span><span>Validation</span></button>
+    <button class="dock-btn" data-mode="system"><span class="material-symbols-outlined">memory</span><span>System</span></button>
+  </nav>
 
-        <div class="table-container" style="padding: 20px;">
-          <h3 style="font-size: 14px; margin-bottom: 12px; color: var(--accent-cyan);">Published API Endpoints</h3>
-          <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 13px; font-family: var(--font-mono);">
-            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/health" target="_blank" style="color: #fff;">/api/v1/health</a> — Service liveness probe</li>
-            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/ready" target="_blank" style="color: #fff;">/api/v1/ready</a> — Storage readiness probe</li>
-            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/system/status" target="_blank" style="color: #fff;">/api/v1/system/status</a> — Dataset and system health</li>
-            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/stops/search?q=kashmere" target="_blank" style="color: #fff;">/api/v1/stops/search</a> — Full-text bus stop search</li>
-            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/places/autocomplete?q=AIIMS" target="_blank" style="color: #fff;">/api/v1/places/autocomplete</a> — Geocoded places & stop autocomplete</li>
-            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/journeys?from=Kashmere%20Gate&to=Nehru%20Place&depart_at=08:30:00" target="_blank" style="color: #fff;">/api/v1/journeys</a> — Multi-criteria RAPTOR journey planner</li>
-            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/analytics/time-comparison?route_id=1728&shape_id=shp_3_2436&from_dist=0&to_dist=15000" target="_blank" style="color: #fff;">/api/v1/analytics/time-comparison</a> — 24-hour congestion comparison</li>
-            <li><span style="color: var(--accent-emerald);">GET</span> <a href="/api/v1/validation/summary" target="_blank" style="color: #fff;">/api/v1/validation/summary</a> — Model accuracy & benchmark summary</li>
-            <li><span style="color: var(--accent-cyan);">DOCS</span> <a href="/docs" target="_blank" style="color: var(--accent-cyan);">/docs</a> — Swagger / OpenAPI Interactive Documentation</li>
-          </ul>
-        </div>
-      </div>
-    </section>
+  <div id="toast" role="status" aria-live="polite"></div>
 
-  </main>
-
-  <!-- Leaflet JS -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <!-- Leaflet MarkerCluster JS -->
-  <script src="/static/vendor/leaflet.markercluster.js?v=20261122-v2.1.0"></script>
-  <!-- PULSE Application Logic -->
-  <script src="/static/js/app.js?v=20261122-v2.1.0"></script>
+  <script type="module" src="/static/js/app.js?v=20261124-v3.1.0"></script>
 </body>
 </html>

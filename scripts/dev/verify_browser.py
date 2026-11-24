@@ -1,14 +1,14 @@
 """
 PULSE Browser Automation & Evidence Verification Script (scripts/verify_browser.py)
 Exercises all real user journeys, layer selector, 2D SVG buses, pick on map,
-and captures genuine screenshots into E:/Pulse/docs/evidence/.
+and captures genuine screenshots into docs/evidence/.
 """
 import sys
 import time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-OUTPUT_DIR = Path("E:/Pulse/docs/evidence")
+OUTPUT_DIR = Path("docs/evidence")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 

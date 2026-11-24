@@ -2,9 +2,9 @@
 **Project:** Predictive Urban Mobility & Live Spatiotemporal Engine (PULSE)  
 **Team:** HopCode | *"The City Moves. We Decode Its Pulse."*  
 **Hackathon:** Transport Stack Hackathon 2026 — Phase 1, Problem 1  
-**Status:** **100% COMPLETE & PRODUCTION VERIFIED (ULTIMATE UPGRADE & REPAIR DIRECTIVE)**  
-**Last Updated:** 2026-11-22  
-**Overall System Health:** All Systems Operational (Green) — 53/53 Tests Passing
+**Status:** Working end to end; accuracy measured on held-out data (see below)  
+**Last Updated:** 2026-11-24  
+**Tests:** 53/53 passing (2026-11-24)
 
 ---
 
@@ -37,7 +37,7 @@
 | **Phase 8** | Production-Quality REST API | **COMPLETED** | 14 REST endpoints in `app/api/v1/`, OpenAPI docs at `/docs` |
 | **Phase 9** | Interactive Web Interface & UX | **COMPLETED** | `frontend/index.html`, `frontend/static/js/app.js`, `pulse.css` |
 | **Phase 10** | End-to-End Workflow Integration | **COMPLETED** | Full pipeline verified with multi-criteria routing & time comparison |
-| **Phase 11** | Validation, Benchmarking & Evaluation | **COMPLETED** | `docs/VALIDATION_REPORT.md` (MAE 1.9m vs. 34.9m timetable baseline) |
+| **Phase 11** | Validation, Benchmarking & Evaluation | **COMPLETED** | `docs/VALIDATION_REPORT.md`: held-out MAE 4.61 min (PULSE) vs 6.57 (timetable) vs 6.77 (flat speed), 10,500 runs |
 | **Phase 12** | Performance, Reliability & Security | **COMPLETED** | Sub-200ms query latency, zero secret leakage, 53/53 tests passing |
 | **Phase 13** | Documentation & Hackathon Submission | **COMPLETED** | `README.md`, `docs/DEMO_SCRIPT.md`, `docs/API_REFERENCE.md` |
 | **Ultimate Directive** | Dynamic Geometry, SVGs, Search, JSON Repair | **COMPLETED** | 9 Deliverables in `docs/` (`docs/JOURNEY_API_JSON_REPAIR.md`, `DYNAMIC_ROUTE_GEOMETRY.md`, `GPS_AND_GTFS_SHAPE_MATCHING.md`, `DELHI_CITYWIDE_SEARCH.md`, `BUS_SVG_MARKER_IMPLEMENTATION.md`, `MAPTILER_SATELLITE_INTEGRATION.md`, `LIVE_VEHICLE_RENDERING.md`, `END_TO_END_TEST_REPORT.md`, `KNOWN_LIMITATIONS.md`) |
@@ -53,3 +53,16 @@
 - **2D Bus SVGs**: Rapido-style vector silhouette (`viewBox="0 0 64 120"`), 4 side wheels, directional headlights, gradient windshield, AC vents, red taillights, dynamic CSS bearing rotation, and luminous freshness halos.
 - **High-Performance Routing**: DuckDB CTE-based 1-transfer routing prevents memory exhaustion, completing multi-corridor transit searches in < 0.05 seconds.
 - **Disk Isolation**: Host `C:` consumed 0 MB of application caches. All operational databases and temporary files isolated to external drive `E:\Pulse`.
+
+
+---
+
+## 2026-11-24 update (supersedes conflicting claims above)
+
+- Traffic model rebuilt from all 31 days with `scripts/build_traffic_model.py`
+  (the previous model used only 500k rows of 1 Oct; 99% of its cells were typed-in speed priors).
+- 22.2% of stretch×time cells are direct measurements; the rest borrow from measured data.
+- Held-out evaluation (train 1–24, test 25–31 Oct): PULSE MAE 4.61 min, timetable 6.57, flat speed 6.77.
+- Google Maps benchmark: script ready, not run.
+- UI replaced with a CesiumJS 3D globe (`frontend/static/js/globe.js`).
+- Not done: two-transfer routing, live-fusion replay/backtest.

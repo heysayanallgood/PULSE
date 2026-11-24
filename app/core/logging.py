@@ -43,8 +43,8 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # File Handler in E:/Pulse/logs/
-    log_dir = Path("E:/Pulse/logs")
+    # File Handler in <workspace>/logs/
+    log_dir = Path("logs")
     log_dir.mkdir(parents=True, exist_ok=True)
     file_handler = logging.FileHandler(log_dir / "pulse.log", encoding="utf-8")
     file_handler.setFormatter(formatter)

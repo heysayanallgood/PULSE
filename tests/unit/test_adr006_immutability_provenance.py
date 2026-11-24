@@ -26,7 +26,7 @@ def test_manifest_schema_and_idempotency():
     }
     
     # Save to manifests directory
-    manifest_dir = Path("E:/Pulse/data/manifests")
+    manifest_dir = Path("data/manifests")
     manifest_dir.mkdir(parents=True, exist_ok=True)
     manifest_file = manifest_dir / f"test_manifest_{manifest_record['source_file']}.json"
     
@@ -48,8 +48,8 @@ def test_manifest_schema_and_idempotency():
 
 def test_atomic_staging_write():
     # Verify the atomic write pattern: write to staging, then atomic rename to destination
-    staging_dir = Path("E:/Pulse/data/staging")
-    processed_dir = Path("E:/Pulse/data/processed")
+    staging_dir = Path("data/staging")
+    processed_dir = Path("data/processed")
     staging_dir.mkdir(parents=True, exist_ok=True)
     processed_dir.mkdir(parents=True, exist_ok=True)
     
