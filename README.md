@@ -1,11 +1,11 @@
-<div align="center">
+﻿<div align="center">
 
 <img src="docs/assets/pulse-showcase.gif" alt="PULSE animated concept showcase: Delhi mobility, live buses, congestion, journey planning and model validation" width="820" />
 
-# 🚌 PULSE
+# ðŸšŒ PULSE
 ### Predictive Urban Mobility & Live Spatiotemporal Engine
 
-**The City Moves. We Decode Its Pulse.** 🌆
+**The City Moves. We Decode Its Pulse.** ðŸŒ†
 
 [![Team](https://img.shields.io/badge/Team-HopCode-00B8D9?style=for-the-badge)](#-team-hopcode)
 [![Hackathon](https://img.shields.io/badge/Transport%20Stack-Hackathon%202026-2457D6?style=for-the-badge)](#-hackathon-context)
@@ -19,7 +19,7 @@
 
 ---
 
-## 🌍 The idea
+## ðŸŒ The idea
 
 A bus timetable tells you when a bus is *scheduled* to move. The city tells a different story.
 
@@ -27,35 +27,35 @@ A bus timetable tells you when a bus is *scheduled* to move. The city tells a di
 
 The prototype was built around **31 days of October 2026 bus GPS data** (approximately **920 million raw rows**) and a network model containing **163,018 road stretches**.
 
-> 🚦 **The goal:** move beyond timetable-only estimates and make bus journey planning responsive to how the network behaves across routes, days and times.
+> ðŸš¦ **The goal:** move beyond timetable-only estimates and make bus journey planning responsive to how the network behaves across routes, days and times.
 
-> 🎞️ **About the animation:** the GIF above is generated concept artwork for the repository. It is not a screen recording, a live map, or evidence of actual UI behaviour. Use the nine screenshot slots below for genuine captures from the running application.
+> ðŸŽžï¸ **About the animation:** the GIF above is generated concept artwork for the repository. It is not a screen recording, a live map, or evidence of actual UI behaviour. Use the nine screenshot slots below for genuine captures from the running application.
 
-## 📊 Held-out validation
+## ðŸ“Š Held-out validation
 
-The reported evaluation uses a chronological split: train on **1–24 October 2026** and evaluate on **25–31 October 2026**, using **10,500 real bus runs** from the held-out days.
+The reported evaluation uses a chronological split: train on **1â€“24 October 2026** and evaluate on **25â€“31 October 2026**, using **10,500 real bus runs** from the held-out days.
 
-| Predictor | Evaluation coverage | Mean absolute error | Median absolute error | Within ±20% |
+| Predictor | Evaluation coverage | Mean absolute error | Median absolute error | Within Â±20% |
 |:--|--:|--:|--:|--:|
 | **PULSE model** | **10,500 runs** | **4.61 min** | **2.47 min** | **63.7%** |
 | Flat average bus speed | Reported baseline | 6.77 min | 4.54 min | 38.6% |
 | Static GTFS timetable | 41.8% of held-out runs matched | 6.57 min | 4.23 min | 39.9% |
 
-- 🎯 The actual travel time fell inside the PULSE prediction range in **84.2%** of evaluated runs.
-- ⚖️ On the subset of runs that matched a GTFS timetable, PULSE recorded **4.25 min MAE** on those same runs.
-- 🧪 The comparison with Google Routes has **not** been run. `scripts/compare_google.py` is prepared for an optional, billed Routes API benchmark.
+- ðŸŽ¯ The actual travel time fell inside the PULSE prediction range in **84.2%** of evaluated runs.
+- âš–ï¸ On the subset of runs that matched a GTFS timetable, PULSE recorded **4.25 min MAE** on those same runs.
+- ðŸ§ª The comparison with Google Routes has **not** been run. `scripts/compare_google.py` is prepared for an optional, billed Routes API benchmark.
 
 See [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md) and [`data/validation/results.json`](data/validation/results.json) for the recorded evaluation output and methodology.
 
 <sub>These are offline, historical hold-out results from the supplied October 2026 dataset. They are not a guarantee of future live accuracy. The timetable row covers only the trips that could be matched to GTFS; it should not be interpreted as a full-coverage comparison.</sub>
 
-## ✨ What PULSE brings together
+## âœ¨ What PULSE brings together
 
 <table>
 <tr>
 <td width="50%">
 
-### 🚌 Live fleet intelligence
+### ðŸšŒ Live fleet intelligence
 
 - GTFS-Realtime vehicle positions from Delhi Open Transit Data.
 - Vehicle heading derived from movement.
@@ -65,7 +65,7 @@ See [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md) and [`data/validati
 </td>
 <td width="50%">
 
-### 🧭 Journey planner
+### ðŸ§­ Journey planner
 
 - Stop / place / coordinate search.
 - Direct and one-transfer bus journeys.
@@ -77,7 +77,7 @@ See [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md) and [`data/validati
 <tr>
 <td>
 
-### 🚦 Spatiotemporal congestion
+### ðŸš¦ Spatiotemporal congestion
 
 - **163,018** modelled stretches.
 - **96** fifteen-minute buckets per day type.
@@ -87,7 +87,7 @@ See [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md) and [`data/validati
 </td>
 <td>
 
-### 🌐 3D globe experience
+### ðŸŒ 3D globe experience
 
 - CesiumJS globe and Delhi fly-in.
 - Satellite, dark and light map options.
@@ -99,7 +99,7 @@ See [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md) and [`data/validati
 <tr>
 <td>
 
-### 📈 Validation dashboard
+### ðŸ“ˆ Validation dashboard
 
 - Held-out model metrics.
 - Time-of-day, day-type and trip-length views.
@@ -109,9 +109,9 @@ See [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md) and [`data/validati
 </td>
 <td>
 
-### 🧩 Explainable estimates
+### ðŸ§© Explainable estimates
 
-- **22.2%** of stretch × time cells are direct GPS measurements.
+- **22.2%** of stretch Ã— time cells are direct GPS measurements.
 - Remaining cells use documented fallback sources.
 - Provenance is retained per cell.
 - No manually typed speed tables are used by the described model pipeline.
@@ -120,35 +120,28 @@ See [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md) and [`data/validati
 </tr>
 </table>
 
-## 🖼️ Application screenshots — 9 gallery slots
+## ðŸ–¼ï¸ PULSE application â€” screenshot gallery
 
-Replace each labelled slot with a **real screenshot captured from your running PULSE application**. Keep the filenames below so the gallery can be enabled without changing the layout.
+These are screenshots of the running application.
 
 <table>
 <tr>
-<td align="center" width="33%"><strong>01 · 🌐 3D Globe</strong><br/><br/>📸 Add screenshot 01<br/><code>01-globe.png</code></td>
-<td align="center" width="33%"><strong>02 · 🛰️ Satellite View</strong><br/><br/>📸 Add screenshot 02<br/><code>02-satellite.png</code></td>
-<td align="center" width="33%"><strong>03 · 🚌 Live Fleet</strong><br/><br/>📸 Add screenshot 03<br/><code>03-live-fleet.png</code></td>
+<td align="center" valign="top" width="33%"><strong>1. PULSE 3D globe</strong><br/><br/><a href="docs/assets/screenshots/01-globe.png"><img src="docs/assets/screenshots/01-globe.png" alt="PULSE 3D globe" width="100%" /></a></td>
+<td align="center" valign="top" width="33%"><strong>2. PULSE satellite view</strong><br/><br/><a href="docs/assets/screenshots/02-satellite.png"><img src="docs/assets/screenshots/02-satellite.png" alt="PULSE satellite view" width="100%" /></a></td>
+<td align="center" valign="top" width="33%"><strong>3. PULSE live bus fleet</strong><br/><br/><a href="docs/assets/screenshots/03-live-fleet.png"><img src="docs/assets/screenshots/03-live-fleet.png" alt="PULSE live bus fleet" width="100%" /></a></td>
 </tr>
 <tr>
-<td align="center"><strong>04 · 🧭 Journey Planner</strong><br/><br/>📸 Add screenshot 04<br/><code>04-journey-planner.png</code></td>
-<td align="center"><strong>05 · 🚦 Congestion Map</strong><br/><br/>📸 Add screenshot 05<br/><code>05-congestion-map.png</code></td>
-<td align="center"><strong>06 · 🏙️ 3D Congestion</strong><br/><br/>📸 Add screenshot 06<br/><code>06-congestion-3d.png</code></td>
+<td align="center" valign="top" width="33%"><strong>4. PULSE journey planner</strong><br/><br/><a href="docs/assets/screenshots/04-journey-planner.png"><img src="docs/assets/screenshots/04-journey-planner.png" alt="PULSE journey planner" width="100%" /></a></td>
+<td align="center" valign="top" width="33%"><strong>5. PULSE congestion map</strong><br/><br/><a href="docs/assets/screenshots/05-congestion-map.png"><img src="docs/assets/screenshots/05-congestion-map.png" alt="PULSE congestion map" width="100%" /></a></td>
+<td align="center" valign="top" width="33%"><strong>6. PULSE 3D congestion</strong><br/><br/><a href="docs/assets/screenshots/06-congestion-3d.png"><img src="docs/assets/screenshots/06-congestion-3d.png" alt="PULSE 3D congestion" width="100%" /></a></td>
 </tr>
 <tr>
-<td align="center"><strong>07 · 📊 Validation</strong><br/><br/>📸 Add screenshot 07<br/><code>07-validation.png</code></td>
-<td align="center"><strong>08 · 🧮 Route Details</strong><br/><br/>📸 Add screenshot 08<br/><code>08-route-details.png</code></td>
-<td align="center"><strong>09 · 🖥️ System Status</strong><br/><br/>📸 Add screenshot 09<br/><code>09-system-status.png</code></td>
+<td align="center" valign="top" width="33%"><strong>7. PULSE validation dashboard</strong><br/><br/><a href="docs/assets/screenshots/07-validation.png"><img src="docs/assets/screenshots/07-validation.png" alt="PULSE validation dashboard" width="100%" /></a></td>
+<td align="center" valign="top" width="33%"><strong>8. PULSE route details</strong><br/><br/><a href="docs/assets/screenshots/08-route-details.png"><img src="docs/assets/screenshots/08-route-details.png" alt="PULSE route details" width="100%" /></a></td>
+<td align="center" valign="top" width="33%"><strong>9. PULSE system status</strong><br/><br/><a href="docs/assets/screenshots/09-system-status.png"><img src="docs/assets/screenshots/09-system-status.png" alt="PULSE system status" width="100%" /></a></td>
 </tr>
 </table>
-
-Once the nine files are added to `docs/assets/screenshots/`, replace each placeholder cell with an image, for example:
-
-```html
-<img src="docs/assets/screenshots/01-globe.png" alt="PULSE 3D globe" width="100%" />
-```
-
-## 🧠 How the engine works
+## ðŸ§  How the engine works
 
 PULSE combines three information layers:
 
@@ -174,19 +167,19 @@ flowchart TD
     D --> M[Congestion and validation analytics]
 ```
 
-### 🔬 Model resolution
+### ðŸ”¬ Model resolution
 
 | Dimension | Current implementation |
 |:--|:--|
 | Network | 163,018 road / route stretches |
-| Time buckets | 96 × 15-minute buckets per day type |
+| Time buckets | 96 Ã— 15-minute buckets per day type |
 | Day types | Weekday and weekend |
-| Directly measured cells | 22.2% of stretch × time cells |
+| Directly measured cells | 22.2% of stretch Ã— time cells |
 | Other cells | Fallback estimates borrowed from other times / route / network levels, with source recorded |
 
-Illustrative weekday network speeds reported by the model: **~27 km/h at 02:00**, **~15 km/h around midday**, and **~12 km/h at 18:00–19:00**. These are model outputs, not a claim that every route or road moves at that speed.
+Illustrative weekday network speeds reported by the model: **~27 km/h at 02:00**, **~15 km/h around midday**, and **~12 km/h at 18:00â€“19:00**. These are model outputs, not a claim that every route or road moves at that speed.
 
-## 🧰 Technology stack
+## ðŸ§° Technology stack
 
 | Layer | Technologies |
 |:--|:--|
@@ -198,7 +191,7 @@ Illustrative weekday network speeds reported by the model: **~27 km/h at 02:00**
 | Maps and visualisation | CesiumJS, map tile providers, 2D / 3D map layers |
 | Quality | Pytest, held-out historical evaluation |
 
-## 🚀 Run locally
+## ðŸš€ Run locally
 
 ### 1. Clone the repository
 
@@ -233,7 +226,7 @@ Edit `.env` and add the credentials required for the services you enable:
 | `CARTO_API_KEY` | Optional CARTO integration, if required by your configured layer |
 | `GEOAPIFY_API_KEY` | Optional Geoapify services |
 
-🔐 **Never commit `.env` or expose the private OTD key in browser code.** Restrict browser-facing map-provider keys to the required domains / APIs and quotas.
+ðŸ” **Never commit `.env` or expose the private OTD key in browser code.** Restrict browser-facing map-provider keys to the required domains / APIs and quotas.
 
 ### 4. Start the API and web application
 
@@ -243,9 +236,9 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 Open **http://127.0.0.1:8000**. Interactive API documentation is available at **http://127.0.0.1:8000/docs**.
 
-> 📦 **Data prerequisite:** raw GPS archives and large derived databases / model artefacts are intentionally not included in this Git repository. A complete local run requires the relevant data and generated artefacts to be prepared. Follow [`docs/TRAFFIC_MODEL.md`](docs/TRAFFIC_MODEL.md), [`plan.md`](plan.md) and [`walkthrough.md`](walkthrough.md) for the project workflow. The command above starts the application; it does not download the October GPS archive automatically.
+> ðŸ“¦ **Data prerequisite:** raw GPS archives and large derived databases / model artefacts are intentionally not included in this Git repository. A complete local run requires the relevant data and generated artefacts to be prepared. Follow [`docs/TRAFFIC_MODEL.md`](docs/TRAFFIC_MODEL.md), [`plan.md`](plan.md) and [`walkthrough.md`](walkthrough.md) for the project workflow. The command above starts the application; it does not download the October GPS archive automatically.
 
-## 🧪 Rebuild and test
+## ðŸ§ª Rebuild and test
 
 Run the test suite:
 
@@ -269,7 +262,7 @@ python scripts/compare_google.py --pairs 60
 
 The Google comparison is **not yet part of the reported validation results**; do not describe PULSE as outperforming Google Maps until the benchmark has been run and its methodology/results are documented.
 
-## 🔌 API surface
+## ðŸ”Œ API surface
 
 | Endpoint | Purpose |
 |:--|:--|
@@ -282,44 +275,44 @@ The Google comparison is **not yet part of the reported validation results**; do
 | `GET /api/v1/validation/summary` | Historical validation summary |
 | `GET /api/v1/system/status` | Data, storage, feed and model status |
 
-## 🗂️ Repository map
+## ðŸ—‚ï¸ Repository map
 
 ```text
 PULSE/
-├── app/                 # FastAPI app, APIs, routing, services and models
-├── frontend/            # HTML, CSS, JavaScript and globe experience
-├── scripts/             # Model build, ingestion, Google benchmark and pipeline
-│   ├── dev/             # Development / diagnostic utilities
-│   └── legacy/          # Superseded pipeline implementations for reference
-├── docs/                # Model method, validation and demo documentation
-│   └── assets/          # README showcase GIF and screenshot gallery
-├── data/                # Small tracked validation output; large data is excluded
-├── tests/               # Unit and integration tests
-├── .env.example         # Safe configuration template
-└── requirements.txt     # Python dependencies
+â”œâ”€â”€ app/                 # FastAPI app, APIs, routing, services and models
+â”œâ”€â”€ frontend/            # HTML, CSS, JavaScript and globe experience
+â”œâ”€â”€ scripts/             # Model build, ingestion, Google benchmark and pipeline
+â”‚   â”œâ”€â”€ dev/             # Development / diagnostic utilities
+â”‚   â””â”€â”€ legacy/          # Superseded pipeline implementations for reference
+â”œâ”€â”€ docs/                # Model method, validation and demo documentation
+â”‚   â””â”€â”€ assets/          # README showcase GIF and screenshot gallery
+â”œâ”€â”€ data/                # Small tracked validation output; large data is excluded
+â”œâ”€â”€ tests/               # Unit and integration tests
+â”œâ”€â”€ .env.example         # Safe configuration template
+â””â”€â”€ requirements.txt     # Python dependencies
 ```
 
-## ⚠️ Known limitations and honest boundaries
+## âš ï¸ Known limitations and honest boundaries
 
-- 🚌 The router currently searches **direct and one-transfer** journeys; two-transfer search is not implemented.
-- 🧩 Rarely operated route variants have sparse GPS observations and rely more heavily on fallback estimates. The model records the source of an estimate.
-- 🧾 Feed trip IDs do not match GTFS trip IDs in all cases; the timetable baseline matched **41.8%** of held-out runs.
-- 📡 Live-fusion replay / backtesting has not been completed. The current live-fusion path applies only to departures within **30 minutes** of now.
-- 🗺️ Google Photorealistic 3D Tiles are optional and currently require the relevant Google Map Tiles API configuration to be enabled. The Routes API benchmark is separate and has not been run.
-- 📉 Only **22.2%** of stretch × time cells are direct measurements; the remaining values are explicitly sourced fallbacks, not direct observations for every cell.
+- ðŸšŒ The router currently searches **direct and one-transfer** journeys; two-transfer search is not implemented.
+- ðŸ§© Rarely operated route variants have sparse GPS observations and rely more heavily on fallback estimates. The model records the source of an estimate.
+- ðŸ§¾ Feed trip IDs do not match GTFS trip IDs in all cases; the timetable baseline matched **41.8%** of held-out runs.
+- ðŸ“¡ Live-fusion replay / backtesting has not been completed. The current live-fusion path applies only to departures within **30 minutes** of now.
+- ðŸ—ºï¸ Google Photorealistic 3D Tiles are optional and currently require the relevant Google Map Tiles API configuration to be enabled. The Routes API benchmark is separate and has not been run.
+- ðŸ“‰ Only **22.2%** of stretch Ã— time cells are direct measurements; the remaining values are explicitly sourced fallbacks, not direct observations for every cell.
 
-## 📚 Project documentation
+## ðŸ“š Project documentation
 
-- 🧠 [Traffic model and methodology](docs/TRAFFIC_MODEL.md)
-- 📊 [Validation report](docs/VALIDATION_REPORT.md)
-- 🎤 [Hackathon demo script](docs/DEMO_SCRIPT.md)
-- 🧭 [Feature walkthrough](walkthrough.md)
-- 🗺️ [Project plan](plan.md)
-- 🧾 [Recorded validation results](data/validation/results.json)
+- ðŸ§  [Traffic model and methodology](docs/TRAFFIC_MODEL.md)
+- ðŸ“Š [Validation report](docs/VALIDATION_REPORT.md)
+- ðŸŽ¤ [Hackathon demo script](docs/DEMO_SCRIPT.md)
+- ðŸ§­ [Feature walkthrough](walkthrough.md)
+- ðŸ—ºï¸ [Project plan](plan.md)
+- ðŸ§¾ [Recorded validation results](data/validation/results.json)
 
-## 🤝 Team HopCode
+## ðŸ¤ Team HopCode
 
-Built for **Transport Stack Hackathon 2026 — Phase 1, Problem 1: Real-Time Bus Traffic Model and Journey Planner**.
+Built for **Transport Stack Hackathon 2026 â€” Phase 1, Problem 1: Real-Time Bus Traffic Model and Journey Planner**.
 
 ### Data acknowledgement
 
@@ -329,8 +322,9 @@ Data references and project context: **Transport Stack and IIIT Delhi, with DTC 
 
 <div align="center">
 
-### 🚌 The City Moves. We Decode Its Pulse. 💙
+### ðŸšŒ The City Moves. We Decode Its Pulse. ðŸ’™
 
-**PULSE · Team HopCode · Delhi, India**
+**PULSE Â· Team HopCode Â· Delhi, India**
 
 </div>
+
